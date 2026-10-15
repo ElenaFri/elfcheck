@@ -4,6 +4,7 @@
 *.bin
 /build/
 /dist/
+/elfcheck
 
 # Debugging and profiling
 core

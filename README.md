@@ -6,8 +6,8 @@ A lightweight ELF64 binary inspector for Linux x86-64, written in NASM assembly.
 
 ## Features
 
-- [ ] Read ELF binary files
-- [ ] Validate ELF magic and header
+- [x] Read ELF binary files
+- [x] Validate ELF magic and header
 - [ ] Identify architecture, file type and endianness
 - [ ] Display ELF header information
 - [ ] Parse and display program headers
@@ -31,14 +31,26 @@ A lightweight ELF64 binary inspector for Linux x86-64, written in NASM assembly.
 - GNU Binutils (`ld`)
 - GNU Make
 
+On Debian/Ubuntu:
+
+```bash
+sudo apt-get install nasm binutils make
+```
+
 ## Build
 
 ```bash
 make
 ```
 
+Run the test suite:
+
+```bash
+make test
+```
+
 ## Usage
 
 ```bash
-./elfscope <file>
+./elfcheck <file>
 ```
