@@ -2,9 +2,9 @@
 ; Linux x86-64, NASM syntax.
 ;
 ; Validates the ELF magic and parses/displays the ELF64 file header
-; (Elf64_Ehdr): class, endianness, OS/ABI, type, machine, entry point,
-; header/table offsets, and table entry sizes/counts. Program headers and
-; section headers will build on top of this.
+; (Elf64_Ehdr), the program headers and the section headers, then performs
+; structural validation (offsets, table bounds, segment/section file ranges).
+; With --json the whole analysis is emitted as a single-line JSON object.
 ;
 ; Exit codes:
 ;   0  valid ELF, no structural issues detected
@@ -97,11 +97,20 @@ default rel
     call print_cstr
 %endmacro
 
+; Like PRINT, but suppressed when [silent] is set (used by validate_structure
+; so it can double as a silent issue counter for the JSON output path).
+%macro VP 1
+    lea rsi, [%1]
+    call vprint
+%endmacro
+
 section .rodata
     elf_magic:      db 0x7f, 'E', 'L', 'F'
 
-    usage_msg:      db "Usage: elfcheck <file>", 10
+    usage_msg:      db "Usage: elfcheck [--json] <file>", 10
     usage_len:      equ $ - usage_msg
+
+    opt_json:       db "--json", 0
 
     open_err_msg:   db "elfcheck: error: cannot open file", 10
     open_err_len:   equ $ - open_err_msg
@@ -241,6 +250,52 @@ section .rodata
     pt_gnuprop:     db "GNU_PROPERTY", 0
     pt_unknown:     db "UNKNOWN", 0
 
+    ; ---- JSON output tokens ----
+    j_lbrace:       db "{", 0
+    j_rbrace:       db "}", 0
+    j_lbrack:       db "[", 0
+    j_rbrack:       db "]", 0
+    j_comma:        db ",", 0
+    j_quote:        db 34, 0
+    j_true:         db "true", 0
+    j_false:        db "false", 0
+    esc_quote:      db 92, 34, 0            ; backslash + double-quote
+    esc_bslash:     db 92, 92, 0            ; two backslashes
+    esc_u00:        db 92, "u00", 0         ; prefix for control-char escapes
+
+    ; JSON object keys (each renders as "name":)
+    jk_header:      db 34, "header", 34, ":", 0
+    jk_phdrs:       db 34, "program_headers", 34, ":", 0
+    jk_shdrs:       db 34, "section_headers", 34, ":", 0
+    jk_validation:  db 34, "validation", 34, ":", 0
+    jk_class:       db 34, "class", 34, ":", 0
+    jk_data:        db 34, "data", 34, ":", 0
+    jk_osabi:       db 34, "osabi", 34, ":", 0
+    jk_type:        db 34, "type", 34, ":", 0
+    jk_machine:     db 34, "machine", 34, ":", 0
+    jk_entry:       db 34, "entry", 34, ":", 0
+    jk_phoff:       db 34, "phoff", 34, ":", 0
+    jk_shoff:       db 34, "shoff", 34, ":", 0
+    jk_flags:       db 34, "flags", 34, ":", 0
+    jk_ehsize:      db 34, "ehsize", 34, ":", 0
+    jk_phentsize:   db 34, "phentsize", 34, ":", 0
+    jk_phnum:       db 34, "phnum", 34, ":", 0
+    jk_shentsize:   db 34, "shentsize", 34, ":", 0
+    jk_shnum:       db 34, "shnum", 34, ":", 0
+    jk_shstrndx:    db 34, "shstrndx", 34, ":", 0
+    jk_index:       db 34, "index", 34, ":", 0
+    jk_offset:      db 34, "offset", 34, ":", 0
+    jk_vaddr:       db 34, "vaddr", 34, ":", 0
+    jk_filesz:      db 34, "filesz", 34, ":", 0
+    jk_memsz:       db 34, "memsz", 34, ":", 0
+    jk_align:       db 34, "align", 34, ":", 0
+    jk_name:        db 34, "name", 34, ":", 0
+    jk_addr:        db 34, "addr", 34, ":", 0
+    jk_size:        db 34, "size", 34, ":", 0
+    jk_addralign:   db 34, "addralign", 34, ":", 0
+    jk_issues:      db 34, "issues", 34, ":", 0
+    jk_valid:       db 34, "valid", 34, ":", 0
+
 section .bss
     ehdr:           resb EHDR_SIZE     ; full ELF header
     phdr:           resb 64            ; one program header entry (56 used)
@@ -253,16 +308,42 @@ section .bss
     shflagbuf:      resb 16            ; section flag letters + NUL
     nread:          resq 1             ; bytes actually read
     numbuf:         resb 32            ; scratch for number formatting
+    json_mode:      resb 1             ; 1 = emit JSON instead of text
+    silent:         resb 1             ; 1 = validate_structure suppresses output
+    jbuf:           resb 8             ; scratch for JSON byte escaping
 
 section .text
     global _start
 
 _start:
-    mov rax, [rsp]             ; argc
-    cmp rax, 2
-    jne .usage
+    ; --- parse arguments: optional --json flag plus exactly one path ---
+    mov r8, [rsp]              ; argc
+    lea r9, [rsp + 8]         ; &argv[0]
+    xor r10, r10              ; path pointer (NULL until found)
+    mov byte [json_mode], 0
+    mov rcx, 1               ; i = 1 (skip argv[0])
+.arg_loop:
+    cmp rcx, r8
+    jae .args_done
+    mov rsi, [r9 + rcx*8]     ; argv[i]
+    lea rdi, [opt_json]
+    call streq               ; al = 1 if argv[i] == "--json"
+    test al, al
+    jnz .arg_json
+    test r10, r10            ; otherwise it's the path (only one allowed)
+    jnz .usage
+    mov r10, rsi
+    jmp .arg_next
+.arg_json:
+    mov byte [json_mode], 1
+.arg_next:
+    inc rcx
+    jmp .arg_loop
+.args_done:
+    test r10, r10            ; a path is required
+    jz .usage
 
-    mov rdi, [rsp + 16]       ; argv[1] -> path
+    mov rdi, r10             ; open(path, O_RDONLY)
     mov rax, SYS_OPEN
     xor esi, esi              ; O_RDONLY
     xor edx, edx
@@ -287,11 +368,16 @@ _start:
     cmp qword [nread], EHDR_SIZE
     jl .truncated
 
+    cmp byte [json_mode], 0
+    jne .emit_json
     call print_header
     call print_program_headers ; reads segments via fd in r12
     call print_section_headers ; reads sections via fd in r12
     call validate_structure    ; sanity-check offsets, counts [issues]
-
+    jmp .after_output
+.emit_json:
+    call print_json            ; emits everything + counts [issues]
+.after_output:
     mov rdi, r12            ; close fd
     mov rax, SYS_CLOSE
     syscall
@@ -948,7 +1034,7 @@ shdr_type_name:
 ; [issues].  Uses fd in r12; r13=index, r14=count.
 ; ---------------------------------------------------------------------------
 validate_structure:
-    PRINT val_title
+    VP val_title
     mov qword [issues], 0
 
     mov rdi, r12               ; file size = lseek(fd, 0, SEEK_END)
@@ -967,12 +1053,12 @@ validate_structure:
     movzx eax, word [ehdr + E_EHSIZE]
     cmp eax, EHDR_SIZE
     je .chk_phentsize
-    PRINT val_mark
-    PRINT m_ehsize
+    VP val_mark
+    VP m_ehsize
     movzx eax, word [ehdr + E_EHSIZE]
-    call print_dec
-    PRINT m_exp64
-    PRINT nl
+    call vdec
+    VP m_exp64
+    VP nl
     inc qword [issues]
 .chk_phentsize:
     ; --- e_phentsize == 56 when phnum > 0 ---
@@ -982,12 +1068,12 @@ validate_structure:
     movzx eax, word [ehdr + E_PHENTSIZE]
     cmp eax, PHDR_SIZE
     je .chk_shentsize
-    PRINT val_mark
-    PRINT m_phentsize
+    VP val_mark
+    VP m_phentsize
     movzx eax, word [ehdr + E_PHENTSIZE]
-    call print_dec
-    PRINT m_exp56
-    PRINT nl
+    call vdec
+    VP m_exp56
+    VP nl
     inc qword [issues]
 .chk_shentsize:
     ; --- e_shentsize == 64 when shnum > 0 ---
@@ -997,12 +1083,12 @@ validate_structure:
     movzx eax, word [ehdr + E_SHENTSIZE]
     cmp eax, SHDR_SIZE
     je .chk_shstrndx
-    PRINT val_mark
-    PRINT m_shentsize
+    VP val_mark
+    VP m_shentsize
     movzx eax, word [ehdr + E_SHENTSIZE]
-    call print_dec
-    PRINT m_exp64
-    PRINT nl
+    call vdec
+    VP m_exp64
+    VP nl
     inc qword [issues]
 .chk_shstrndx:
     ; --- e_shstrndx < shnum (ignore SHN_XINDEX 0xffff) ---
@@ -1015,15 +1101,15 @@ validate_structure:
     movzx ecx, word [ehdr + E_SHNUM]
     cmp eax, ecx
     jb .chk_phtab
-    PRINT val_mark
-    PRINT m_shstrndx
+    VP val_mark
+    VP m_shstrndx
     movzx eax, word [ehdr + E_SHSTRNDX]
-    call print_dec
-    PRINT m_oorange
+    call vdec
+    VP m_oorange
     movzx eax, word [ehdr + E_SHNUM]
-    call print_dec
-    PRINT m_rparen
-    PRINT nl
+    call vdec
+    VP m_rparen
+    VP nl
     inc qword [issues]
 .chk_phtab:
     ; --- program header table within file ---
@@ -1037,8 +1123,8 @@ validate_structure:
     cmp rax, [filesize]
     jbe .chk_shtab
 .phtab_bad:
-    PRINT val_mark
-    PRINT m_phtab
+    VP val_mark
+    VP m_phtab
     inc qword [issues]
 .chk_shtab:
     ; --- section header table within file ---
@@ -1052,8 +1138,8 @@ validate_structure:
     cmp rax, [filesize]
     jbe .chk_segments
 .shtab_bad:
-    PRINT val_mark
-    PRINT m_shtab
+    VP val_mark
+    VP m_shtab
     inc qword [issues]
 .chk_segments:
     ; --- per-segment file range checks ---
@@ -1084,30 +1170,30 @@ validate_structure:
     cmp rax, [filesize]
     jbe .vp_memcheck
 .vp_past:
-    PRINT val_mark
-    PRINT m_seg
+    VP val_mark
+    VP m_seg
     mov rax, r13
-    call print_dec
-    PRINT m_past_off
+    call vdec
+    VP m_past_off
     mov rax, [phdr + P_OFFSET]
-    call print_hex
-    PRINT m_filesz
+    call vhex
+    VP m_filesz
     mov rax, [phdr + P_FILESZ]
-    call print_hex
-    PRINT m_rparen
-    PRINT nl
+    call vhex
+    VP m_rparen
+    VP nl
     inc qword [issues]
 .vp_memcheck:
     ; filesz <= memsz ?
     mov rax, [phdr + P_FILESZ]
     cmp rax, [phdr + P_MEMSZ]
     jbe .vp_next
-    PRINT val_mark
-    PRINT m_seg
+    VP val_mark
+    VP m_seg
     mov rax, r13
-    call print_dec
-    PRINT m_fmgt
-    PRINT nl
+    call vdec
+    VP m_fmgt
+    VP nl
     inc qword [issues]
 .vp_next:
     inc r13
@@ -1146,18 +1232,18 @@ validate_structure:
     cmp rax, [filesize]
     jbe .vs_next
 .vs_past:
-    PRINT val_mark
-    PRINT m_sect
+    VP val_mark
+    VP m_sect
     mov rax, r13
-    call print_dec
-    PRINT m_past_off
+    call vdec
+    VP m_past_off
     mov rax, [shdr + SH_OFFSET]
-    call print_hex
-    PRINT m_size
+    call vhex
+    VP m_size
     mov rax, [shdr + SH_SIZE]
-    call print_hex
-    PRINT m_rparen
-    PRINT nl
+    call vhex
+    VP m_rparen
+    VP nl
     inc qword [issues]
 .vs_next:
     inc r13
@@ -1165,13 +1251,446 @@ validate_structure:
 .summary:
     cmp qword [issues], 0
     jne .some
-    PRINT val_ok
+    VP val_ok
     ret
 .some:
-    PRINT two_spaces
+    VP two_spaces
+    mov rax, [issues]
+    call vdec
+    VP m_issues
+    ret
+
+; ---------------------------------------------------------------------------
+; streq - compare two NUL-terminated strings.
+;   in:  rsi, rdi = string pointers
+;   out: al = 1 if equal, else 0.  rsi/rdi preserved.
+; ---------------------------------------------------------------------------
+streq:
+    push rsi
+    push rdi
+.se_loop:
+    mov al, [rsi]
+    mov dl, [rdi]
+    cmp al, dl
+    jne .se_ne
+    test al, al
+    jz .se_eq
+    inc rsi
+    inc rdi
+    jmp .se_loop
+.se_eq:
+    mov al, 1
+    jmp .se_out
+.se_ne:
+    xor al, al
+.se_out:
+    pop rdi
+    pop rsi
+    ret
+
+; ---------------------------------------------------------------------------
+; vprint / vdec / vhex - like print_cstr/print_dec/print_hex, but no-ops when
+; [silent] is set.  Lets validate_structure double as a silent issue counter.
+; ---------------------------------------------------------------------------
+vprint:                    ; in: rsi = cstr
+    cmp byte [silent], 0
+    jne .v_skip
+    call print_cstr
+.v_skip:
+    ret
+
+vdec:                      ; in: rax = value
+    cmp byte [silent], 0
+    jne .vd_skip
+    call print_dec
+.vd_skip:
+    ret
+
+vhex:                      ; in: rax = value
+    cmp byte [silent], 0
+    jne .vh_skip
+    call print_hex
+.vh_skip:
+    ret
+
+; ---------------------------------------------------------------------------
+; print_json - emit the whole analysis as a single-line JSON object.
+; Minified on purpose (pipe through `jq` for pretty-printing).
+; ---------------------------------------------------------------------------
+print_json:
+    PRINT j_lbrace
+    call json_header
+    PRINT j_comma
+    call json_phdrs
+    PRINT j_comma
+    call json_shdrs
+    PRINT j_comma
+    call json_validation
+    PRINT j_rbrace
+    PRINT nl
+    ret
+
+; json_header - "header":{ ...fields... }
+json_header:
+    PRINT jk_header
+    PRINT j_lbrace
+
+    PRINT jk_class
+    movzx eax, byte [ehdr + EI_CLASS]
+    call class_name
+    mov rsi, rax
+    call jname
+    PRINT j_comma
+
+    PRINT jk_data
+    movzx eax, byte [ehdr + EI_DATA]
+    call data_name
+    mov rsi, rax
+    call jname
+    PRINT j_comma
+
+    PRINT jk_osabi
+    movzx eax, byte [ehdr + EI_OSABI]
+    call osabi_name
+    mov rsi, rax
+    call jname
+    PRINT j_comma
+
+    PRINT jk_type
+    movzx eax, word [ehdr + E_TYPE]
+    call type_name
+    mov rsi, rax
+    call jname
+    PRINT j_comma
+
+    PRINT jk_machine
+    movzx eax, word [ehdr + E_MACHINE]
+    call machine_name
+    mov rsi, rax
+    call jname
+    PRINT j_comma
+
+    PRINT jk_entry
+    mov rax, [ehdr + E_ENTRY]
+    call jhex
+    PRINT j_comma
+
+    PRINT jk_phoff
+    mov rax, [ehdr + E_PHOFF]
+    call print_dec
+    PRINT j_comma
+
+    PRINT jk_shoff
+    mov rax, [ehdr + E_SHOFF]
+    call print_dec
+    PRINT j_comma
+
+    PRINT jk_flags
+    mov eax, dword [ehdr + E_FLAGS]
+    call jhex
+    PRINT j_comma
+
+    PRINT jk_ehsize
+    movzx eax, word [ehdr + E_EHSIZE]
+    call print_dec
+    PRINT j_comma
+
+    PRINT jk_phentsize
+    movzx eax, word [ehdr + E_PHENTSIZE]
+    call print_dec
+    PRINT j_comma
+
+    PRINT jk_phnum
+    movzx eax, word [ehdr + E_PHNUM]
+    call print_dec
+    PRINT j_comma
+
+    PRINT jk_shentsize
+    movzx eax, word [ehdr + E_SHENTSIZE]
+    call print_dec
+    PRINT j_comma
+
+    PRINT jk_shnum
+    movzx eax, word [ehdr + E_SHNUM]
+    call print_dec
+    PRINT j_comma
+
+    PRINT jk_shstrndx
+    movzx eax, word [ehdr + E_SHSTRNDX]
+    call print_dec
+
+    PRINT j_rbrace
+    ret
+
+; json_phdrs - "program_headers":[ {..}, {..} ]
+json_phdrs:
+    PRINT jk_phdrs
+    PRINT j_lbrack
+    movzx r14d, word [ehdr + E_PHNUM]
+    xor r13, r13
+.jp_loop:
+    cmp r13, r14
+    jae .jp_done
+    movzx eax, word [ehdr + E_PHENTSIZE]
+    imul rax, r13
+    add rax, [ehdr + E_PHOFF]
+    mov rdi, r12
+    mov rsi, rax
+    xor edx, edx
+    mov rax, SYS_LSEEK
+    syscall
+    mov rdi, r12
+    lea rsi, [phdr]
+    mov rdx, PHDR_SIZE
+    mov rax, SYS_READ
+    syscall
+    cmp rax, PHDR_SIZE
+    jl .jp_done
+    test r13, r13
+    jz .jp_nocomma
+    PRINT j_comma
+.jp_nocomma:
+    call json_one_phdr
+    inc r13
+    jmp .jp_loop
+.jp_done:
+    PRINT j_rbrack
+    ret
+
+json_one_phdr:
+    PRINT j_lbrace
+    PRINT jk_index
+    mov rax, r13
+    call print_dec
+    PRINT j_comma
+    PRINT jk_type
+    mov eax, dword [phdr + P_TYPE]
+    call phdr_type_name
+    mov rsi, rax
+    call jname
+    PRINT j_comma
+    PRINT jk_flags
+    mov eax, dword [phdr + P_FLAGS]
+    call build_flags
+    lea rsi, [flagbuf]
+    call jname
+    PRINT j_comma
+    PRINT jk_offset
+    mov rax, [phdr + P_OFFSET]
+    call jhex
+    PRINT j_comma
+    PRINT jk_vaddr
+    mov rax, [phdr + P_VADDR]
+    call jhex
+    PRINT j_comma
+    PRINT jk_filesz
+    mov rax, [phdr + P_FILESZ]
+    call jhex
+    PRINT j_comma
+    PRINT jk_memsz
+    mov rax, [phdr + P_MEMSZ]
+    call jhex
+    PRINT j_comma
+    PRINT jk_align
+    mov rax, [phdr + P_ALIGN]
+    call jhex
+    PRINT j_rbrace
+    ret
+
+; json_shdrs - "section_headers":[ {..}, {..} ]
+json_shdrs:
+    PRINT jk_shdrs
+    PRINT j_lbrack
+    movzx r14d, word [ehdr + E_SHNUM]
+    test r14, r14
+    jz .js_done
+    call load_shstrtab
+    xor r13, r13
+.js_loop:
+    cmp r13, r14
+    jae .js_done
+    movzx eax, word [ehdr + E_SHENTSIZE]
+    imul rax, r13
+    add rax, [ehdr + E_SHOFF]
+    mov rdi, r12
+    mov rsi, rax
+    xor edx, edx
+    mov rax, SYS_LSEEK
+    syscall
+    mov rdi, r12
+    lea rsi, [shdr]
+    mov rdx, SHDR_SIZE
+    mov rax, SYS_READ
+    syscall
+    cmp rax, SHDR_SIZE
+    jl .js_done
+    test r13, r13
+    jz .js_nocomma
+    PRINT j_comma
+.js_nocomma:
+    call json_one_shdr
+    inc r13
+    jmp .js_loop
+.js_done:
+    PRINT j_rbrack
+    ret
+
+json_one_shdr:
+    PRINT j_lbrace
+    PRINT jk_index
+    mov rax, r13
+    call print_dec
+    PRINT j_comma
+    PRINT jk_name
+    call section_name_ptr       ; rsi -> name
+    call jstr                   ; escaped (name comes from the file)
+    PRINT j_comma
+    PRINT jk_type
+    mov eax, dword [shdr + SH_TYPE]
+    call shdr_type_name
+    mov rsi, rax
+    call jname
+    PRINT j_comma
+    PRINT jk_flags
+    mov rax, [shdr + SH_FLAGS]
+    call build_sh_flags
+    lea rsi, [shflagbuf]
+    call jname
+    PRINT j_comma
+    PRINT jk_addr
+    mov rax, [shdr + SH_ADDR]
+    call jhex
+    PRINT j_comma
+    PRINT jk_offset
+    mov rax, [shdr + SH_OFFSET]
+    call jhex
+    PRINT j_comma
+    PRINT jk_size
+    mov rax, [shdr + SH_SIZE]
+    call jhex
+    PRINT j_comma
+    PRINT jk_addralign
+    mov rax, [shdr + SH_ADDRALIGN]
+    call jhex
+    PRINT j_rbrace
+    ret
+
+; json_validation - "validation":{"issues":N,"valid":bool}
+; Runs validate_structure silently to count issues.
+json_validation:
+    PRINT jk_validation
+    PRINT j_lbrace
+    mov byte [silent], 1
+    call validate_structure
+    mov byte [silent], 0
+    PRINT jk_issues
     mov rax, [issues]
     call print_dec
-    PRINT m_issues
+    PRINT j_comma
+    PRINT jk_valid
+    cmp qword [issues], 0
+    jne .jv_invalid
+    PRINT j_true
+    jmp .jv_close
+.jv_invalid:
+    PRINT j_false
+.jv_close:
+    PRINT j_rbrace
+    ret
+
+; ---------------------------------------------------------------------------
+; jname - print rsi as a JSON string, no escaping (safe enum/flag text only)
+; ---------------------------------------------------------------------------
+jname:                     ; in: rsi = cstr
+    push rsi
+    PRINT j_quote
+    pop rsi
+    call print_cstr
+    PRINT j_quote
+    ret
+
+; ---------------------------------------------------------------------------
+; jstr - print rsi as a JSON string, escaping \" \\ and control bytes
+; ---------------------------------------------------------------------------
+jstr:                      ; in: rsi = cstr
+    push rsi
+    PRINT j_quote
+    pop rsi
+    call json_escape
+    PRINT j_quote
+    ret
+
+; ---------------------------------------------------------------------------
+; jhex - print rax as a JSON string holding its "0x.." hex form
+; ---------------------------------------------------------------------------
+jhex:                      ; in: rax = value
+    push rax
+    PRINT j_quote
+    pop rax
+    call print_hex
+    PRINT j_quote
+    ret
+
+; ---------------------------------------------------------------------------
+; json_escape - print NUL-terminated string (rsi), escaping JSON specials.
+; ---------------------------------------------------------------------------
+json_escape:               ; in: rsi = cstr
+    push rbx
+    mov rbx, rsi
+.je_loop:
+    movzx eax, byte [rbx]
+    test al, al
+    jz .je_done
+    cmp al, 34                 ; "
+    je .je_quote
+    cmp al, 92                 ; backslash
+    je .je_bslash
+    cmp al, 0x20               ; control char
+    jb .je_ctrl
+    mov [jbuf], al             ; ordinary byte
+    lea rsi, [jbuf]
+    mov rdx, 1
+    call print_str
+    jmp .je_next
+.je_quote:
+    PRINT esc_quote
+    jmp .je_next
+.je_bslash:
+    PRINT esc_bslash
+    jmp .je_next
+.je_ctrl:
+    PRINT esc_u00              ; emit \u00 then two hex digits
+    movzx eax, byte [rbx]
+    mov edx, eax
+    shr edx, 4
+    and edx, 0xf
+    mov al, dl
+    call nibble_hex
+    mov [jbuf], al
+    movzx edx, byte [rbx]
+    and edx, 0xf
+    mov al, dl
+    call nibble_hex
+    mov [jbuf + 1], al
+    lea rsi, [jbuf]
+    mov rdx, 2
+    call print_str
+.je_next:
+    inc rbx
+    jmp .je_loop
+.je_done:
+    pop rbx
+    ret
+
+; nibble_hex - low nibble of al -> ascii hex char in al
+nibble_hex:
+    and al, 0xf
+    cmp al, 10
+    jb .nh_digit
+    add al, 'a' - 10
+    ret
+.nh_digit:
+    add al, '0'
     ret
 
 ; ---------------------------------------------------------------------------

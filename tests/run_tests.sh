@@ -72,6 +72,28 @@ out="$("$BIN" "$TMP/truncated.elf" 2>&1)"; code=$?
 check "truncated ELF flagged"        2 "$code" "issue(s) found"  "$out"
 check "truncated ELF reports marker" 2 "$code" "[!]"            "$out"
 
+# 7. JSON output mode
+out="$("$BIN" --json "$BIN" 2>&1)"; code=$?
+check "--json exits 0 for valid ELF"  0 "$code" '{"header":{'       "$out"
+check "--json has program_headers"   0 "$code" '"program_headers":' "$out"
+check "--json has section_headers"   0 "$code" '"section_headers":' "$out"
+check "--json reports valid:true"    0 "$code" '"valid":true'      "$out"
+
+# flag accepted after the path too
+out="$("$BIN" "$BIN" --json 2>&1)"; code=$?
+check "--json accepted after path"   0 "$code" '{"header":{'       "$out"
+
+# JSON on a malformed file -> valid:false, exit 2
+out="$("$BIN" --json "$TMP/truncated.elf" 2>&1)"; code=$?
+check "--json flags malformed ELF"   2 "$code" '"valid":false'     "$out"
+
+# If python3 is available, assert the JSON actually parses
+if command -v python3 >/dev/null 2>&1; then
+    "$BIN" --json "$BIN" 2>/dev/null | python3 -m json.tool >/dev/null 2>&1
+    pcode=$?
+    check "--json is well-formed JSON" 0 "$pcode" "" ""
+fi
+
 echo
 echo "Results: $pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

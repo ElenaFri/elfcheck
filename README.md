@@ -15,7 +15,7 @@ A lightweight ELF64 binary inspector for Linux x86-64, written in NASM assembly.
 - [x] Validate file offsets and structure boundaries
 - [x] Detect malformed or truncated ELF files
 - [x] Report structural inconsistencies
-- [ ] Export analysis results as JSON
+- [x] Export analysis results as JSON
 - [ ] Add automated tests with valid and malformed ELF files
 - [ ] Disassemble machine code sections
 - [ ] Display assembly instructions with addresses and opcodes
@@ -54,3 +54,13 @@ make test
 ```bash
 ./elfcheck <file>
 ```
+
+Emit the analysis as a single-line JSON object instead of the human-readable
+report (pipe through `jq` to pretty-print):
+
+```bash
+./elfcheck --json <file>
+```
+
+Exit codes: `0` valid with no structural issues, `1` usage/read error or not an
+ELF file, `2` valid ELF header but structural inconsistencies were found.
