@@ -56,6 +56,15 @@
 %define P_MEMSZ     40
 %define P_ALIGN     48
 
+; ---- program header table column widths ----
+%define W_IDX       5
+%define W_TYPE      15
+%define W_FLAGS     7
+%define W_OFF       14
+%define W_VADDR     14
+%define W_FILESZ    14
+%define W_MEMSZ     14
+
 default rel
 
 ; Print a NUL-terminated string at %1 to stdout.
@@ -132,14 +141,15 @@ section .rodata
 
     ; ---- program header display ----
     ph_title:       db 10, "Program Headers:", 10, 0
-    ph_idx_open:    db "  [", 0
-    ph_idx_close:   db "] ", 0
-    ph_flags_lbl:   db "flags=", 0
-    ph_off_lbl:     db "  off=", 0
-    ph_vaddr_lbl:   db "  vaddr=", 0
-    ph_filesz_lbl:  db "  filesz=", 0
-    ph_memsz_lbl:   db "  memsz=", 0
-    ph_align_lbl:   db "  align=", 0
+    two_spaces:     db "  ", 0
+    col_idx:        db "Idx", 0
+    col_type:       db "Type", 0
+    col_flags:      db "Flags", 0
+    col_offset:     db "Offset", 0
+    col_vaddr:      db "VirtAddr", 0
+    col_filesz:     db "FileSize", 0
+    col_memsz:      db "MemSize", 0
+    col_align:      db "Align", 0
     spaces16:       db "                ", 0   ; 16 spaces, for field padding
 
     ; ---- program header (segment) type names ----
@@ -159,7 +169,7 @@ section .rodata
 section .bss
     ehdr:           resb EHDR_SIZE     ; full ELF header
     phdr:           resb 64            ; one program header entry (56 used)
-    flagbuf:        resb 3             ; "RWX" flag string
+    flagbuf:        resb 4             ; "RWX" flag string + NUL
     nread:          resq 1             ; bytes actually read
     numbuf:         resb 32            ; scratch for number formatting
 
@@ -362,6 +372,7 @@ print_program_headers:
     jz .pph_ret
 
     PRINT ph_title
+    call print_ph_colhdr
     xor r13, r13               ; i = 0
 .pph_loop:
     cmp r13, r14
@@ -391,48 +402,79 @@ print_program_headers:
 .pph_ret:
     ret
 
-; print one program header entry from [phdr]
+; print the aligned column header row (same widths as the data rows)
+print_ph_colhdr:
+    PRINT two_spaces
+    lea rsi, [col_idx]
+    mov ecx, W_IDX
+    call print_cstr_pad
+    lea rsi, [col_type]
+    mov ecx, W_TYPE
+    call print_cstr_pad
+    lea rsi, [col_flags]
+    mov ecx, W_FLAGS
+    call print_cstr_pad
+    lea rsi, [col_offset]
+    mov ecx, W_OFF
+    call print_cstr_pad
+    lea rsi, [col_vaddr]
+    mov ecx, W_VADDR
+    call print_cstr_pad
+    lea rsi, [col_filesz]
+    mov ecx, W_FILESZ
+    call print_cstr_pad
+    lea rsi, [col_memsz]
+    mov ecx, W_MEMSZ
+    call print_cstr_pad
+    PRINT col_align
+    PRINT nl
+    ret
+
+; print one program header entry from [phdr] as an aligned table row
 print_one_phdr:
-    PRINT ph_idx_open
-    mov rax, r13
-    call print_dec
-    PRINT ph_idx_close
+    PRINT two_spaces
+
+    mov rax, r13               ; index
+    mov ecx, W_IDX
+    call pfield_dec
 
     mov eax, dword [phdr + P_TYPE]
     call phdr_type_name
     mov rsi, rax
-    mov ecx, 13                ; pad type name to a fixed column
+    mov ecx, W_TYPE
     call print_cstr_pad
 
-    PRINT ph_flags_lbl
     mov eax, dword [phdr + P_FLAGS]
-    call print_flags
+    call build_flags
+    lea rsi, [flagbuf]
+    mov ecx, W_FLAGS
+    call print_cstr_pad
 
-    PRINT ph_off_lbl
     mov rax, [phdr + P_OFFSET]
-    call print_hex
+    mov ecx, W_OFF
+    call pfield_hex
 
-    PRINT ph_vaddr_lbl
     mov rax, [phdr + P_VADDR]
-    call print_hex
+    mov ecx, W_VADDR
+    call pfield_hex
 
-    PRINT ph_filesz_lbl
     mov rax, [phdr + P_FILESZ]
-    call print_hex
+    mov ecx, W_FILESZ
+    call pfield_hex
 
-    PRINT ph_memsz_lbl
     mov rax, [phdr + P_MEMSZ]
-    call print_hex
+    mov ecx, W_MEMSZ
+    call pfield_hex
 
-    PRINT ph_align_lbl
-    mov rax, [phdr + P_ALIGN]
+    mov rax, [phdr + P_ALIGN]  ; last column, no padding
     call print_hex
 
     PRINT nl
     ret
 
-; print_flags - render p_flags (eax) as a 3-char R/W/X string
-print_flags:                   ; in: eax = flags
+; build_flags - render p_flags (eax) into flagbuf as a NUL-terminated
+;               3-char R/W/X string
+build_flags:                   ; in: eax = flags
     test al, 4
     jz .nr
     mov byte [flagbuf + 0], 'R'
@@ -454,9 +496,7 @@ print_flags:                   ; in: eax = flags
 .nx:
     mov byte [flagbuf + 2], '-'
 .emit:
-    lea rsi, [flagbuf]
-    mov rdx, 3
-    call print_str
+    mov byte [flagbuf + 3], 0
     ret
 
 ; phdr_type_name - map p_type (eax) to a name pointer (rax)
@@ -612,9 +652,10 @@ machine_name:
     ret
 
 ; ---------------------------------------------------------------------------
-; print_hex - print "0x" + minimal-width hex of rax to stdout
+; fmt_hex - format "0x" + minimal-width hex of rax into numbuf (NUL-terminated)
+;           out: rsi = pointer to the string
 ; ---------------------------------------------------------------------------
-print_hex:                 ; in: rax = value
+fmt_hex:                   ; in: rax = value
     push rbx
     push r12
     mov r12, rax           ; value
@@ -647,21 +688,21 @@ print_hex:                 ; in: rax = value
     inc rbx
     sub rcx, 4
     jns .emit
+    mov byte [rbx], 0      ; NUL terminate
     lea rsi, [numbuf]
-    mov rdx, rbx
-    sub rdx, rsi
-    call print_str
     pop r12
     pop rbx
     ret
 
 ; ---------------------------------------------------------------------------
-; print_dec - print unsigned decimal of rax to stdout
+; fmt_dec - format unsigned decimal of rax into numbuf (NUL-terminated)
+;           out: rsi = pointer to the first digit
 ; ---------------------------------------------------------------------------
-print_dec:                 ; in: rax = value
+fmt_dec:                   ; in: rax = value
     push rbx
     mov rcx, 10
-    lea rbx, [numbuf + 31] ; build digits backward from the end
+    mov byte [numbuf + 31], 0   ; NUL
+    lea rbx, [numbuf + 30]      ; build digits backward
     test rax, rax
     jnz .loop
     mov byte [rbx], '0'
@@ -679,11 +720,38 @@ print_dec:                 ; in: rax = value
 .done:
     inc rbx
     mov rsi, rbx
-    lea rax, [numbuf + 32]
-    sub rax, rbx
-    mov rdx, rax
-    call print_str
     pop rbx
+    ret
+
+; ---------------------------------------------------------------------------
+; print_hex / print_dec - format and print rax to stdout
+; ---------------------------------------------------------------------------
+print_hex:                 ; in: rax = value
+    call fmt_hex
+    call print_cstr
+    ret
+
+print_dec:                 ; in: rax = value
+    call fmt_dec
+    call print_cstr
+    ret
+
+; ---------------------------------------------------------------------------
+; pfield_hex / pfield_dec - format rax, then print left-justified in a field
+;                           of width ecx (space-padded)
+; ---------------------------------------------------------------------------
+pfield_hex:                ; in: rax = value, ecx = width
+    push rcx
+    call fmt_hex           ; rsi -> string
+    pop rcx
+    call print_cstr_pad
+    ret
+
+pfield_dec:                ; in: rax = value, ecx = width
+    push rcx
+    call fmt_dec           ; rsi -> string
+    pop rcx
+    call print_cstr_pad
     ret
 
 ; ---------------------------------------------------------------------------
