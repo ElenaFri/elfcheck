@@ -15,7 +15,10 @@
 %define SYS_WRITE  1
 %define SYS_OPEN   2
 %define SYS_CLOSE  3
+%define SYS_LSEEK  8
 %define SYS_EXIT   60
+
+%define SEEK_SET   0
 
 ; ---- File descriptors ----
 %define STDOUT     1
@@ -42,6 +45,16 @@
 %define E_SHENTSIZE 58
 %define E_SHNUM     60
 %define E_SHSTRNDX  62
+
+; ---- program header field offsets (Elf64_Phdr, 56 bytes) ----
+%define PHDR_SIZE   56
+%define P_TYPE      0
+%define P_FLAGS     4
+%define P_OFFSET    8
+%define P_VADDR     16
+%define P_FILESZ    32
+%define P_MEMSZ     40
+%define P_ALIGN     48
 
 default rel
 
@@ -117,8 +130,36 @@ section .rodata
     s_mach_riscv:   db "RISC-V", 0
     s_mach_unknown: db "unknown", 0
 
+    ; ---- program header display ----
+    ph_title:       db 10, "Program Headers:", 10, 0
+    ph_idx_open:    db "  [", 0
+    ph_idx_close:   db "] ", 0
+    ph_flags_lbl:   db "flags=", 0
+    ph_off_lbl:     db "  off=", 0
+    ph_vaddr_lbl:   db "  vaddr=", 0
+    ph_filesz_lbl:  db "  filesz=", 0
+    ph_memsz_lbl:   db "  memsz=", 0
+    ph_align_lbl:   db "  align=", 0
+    spaces16:       db "                ", 0   ; 16 spaces, for field padding
+
+    ; ---- program header (segment) type names ----
+    pt_null:        db "NULL", 0
+    pt_load:        db "LOAD", 0
+    pt_dynamic:     db "DYNAMIC", 0
+    pt_interp:      db "INTERP", 0
+    pt_note:        db "NOTE", 0
+    pt_phdr:        db "PHDR", 0
+    pt_tls:         db "TLS", 0
+    pt_ehframe:     db "GNU_EH_FRAME", 0
+    pt_gnustack:    db "GNU_STACK", 0
+    pt_gnurelro:    db "GNU_RELRO", 0
+    pt_gnuprop:     db "GNU_PROPERTY", 0
+    pt_unknown:     db "UNKNOWN", 0
+
 section .bss
     ehdr:           resb EHDR_SIZE     ; full ELF header
+    phdr:           resb 64            ; one program header entry (56 used)
+    flagbuf:        resb 3             ; "RWX" flag string
     nread:          resq 1             ; bytes actually read
     numbuf:         resb 32            ; scratch for number formatting
 
@@ -148,10 +189,6 @@ _start:
     jl .read_error
     mov [nread], rax
 
-    mov rdi, r12            ; close fd
-    mov rax, SYS_CLOSE
-    syscall
-
     mov eax, dword [ehdr]      ; validate magic
     cmp eax, dword [elf_magic]
     jne .invalid
@@ -160,10 +197,18 @@ _start:
     jl .truncated
 
     call print_header
+    call print_program_headers ; reads segments via fd in r12
+
+    mov rdi, r12            ; close fd
+    mov rax, SYS_CLOSE
+    syscall
     xor edi, edi
     jmp .exit
 
 .invalid:
+    mov rdi, r12            ; close fd
+    mov rax, SYS_CLOSE
+    syscall
     lea rsi, [invalid_msg]
     mov rdx, invalid_len
     call print_stderr
@@ -171,6 +216,9 @@ _start:
     jmp .exit
 
 .truncated:
+    mov rdi, r12            ; close fd
+    mov rax, SYS_CLOSE
+    syscall
     lea rsi, [trunc_msg]
     mov rdx, trunc_len
     call print_stderr
@@ -300,6 +348,164 @@ print_header:
     movzx eax, word [ehdr + E_SHSTRNDX]
     call print_dec
     PRINT nl
+    ret
+
+; ---------------------------------------------------------------------------
+; print_program_headers - iterate and display the program header table.
+; Reads each entry from the file (fd in r12) using its own lseek+read so it
+; works regardless of how much of the file was buffered.
+; Registers: r12=fd (preserved), r13=index, r14=phnum (callee-saved style).
+; ---------------------------------------------------------------------------
+print_program_headers:
+    movzx r14d, word [ehdr + E_PHNUM]
+    test r14, r14
+    jz .pph_ret
+
+    PRINT ph_title
+    xor r13, r13               ; i = 0
+.pph_loop:
+    cmp r13, r14
+    jae .pph_ret
+
+    movzx eax, word [ehdr + E_PHENTSIZE]
+    imul rax, r13              ; i * phentsize
+    add rax, [ehdr + E_PHOFF]  ; file offset of entry i
+
+    mov rdi, r12               ; lseek(fd, offset, SEEK_SET)
+    mov rsi, rax
+    xor edx, edx
+    mov rax, SYS_LSEEK
+    syscall
+
+    mov rdi, r12               ; read(fd, phdr, PHDR_SIZE)
+    lea rsi, [phdr]
+    mov rdx, PHDR_SIZE
+    mov rax, SYS_READ
+    syscall
+    cmp rax, PHDR_SIZE
+    jl .pph_ret                ; short read -> stop
+
+    call print_one_phdr
+    inc r13
+    jmp .pph_loop
+.pph_ret:
+    ret
+
+; print one program header entry from [phdr]
+print_one_phdr:
+    PRINT ph_idx_open
+    mov rax, r13
+    call print_dec
+    PRINT ph_idx_close
+
+    mov eax, dword [phdr + P_TYPE]
+    call phdr_type_name
+    mov rsi, rax
+    mov ecx, 13                ; pad type name to a fixed column
+    call print_cstr_pad
+
+    PRINT ph_flags_lbl
+    mov eax, dword [phdr + P_FLAGS]
+    call print_flags
+
+    PRINT ph_off_lbl
+    mov rax, [phdr + P_OFFSET]
+    call print_hex
+
+    PRINT ph_vaddr_lbl
+    mov rax, [phdr + P_VADDR]
+    call print_hex
+
+    PRINT ph_filesz_lbl
+    mov rax, [phdr + P_FILESZ]
+    call print_hex
+
+    PRINT ph_memsz_lbl
+    mov rax, [phdr + P_MEMSZ]
+    call print_hex
+
+    PRINT ph_align_lbl
+    mov rax, [phdr + P_ALIGN]
+    call print_hex
+
+    PRINT nl
+    ret
+
+; print_flags - render p_flags (eax) as a 3-char R/W/X string
+print_flags:                   ; in: eax = flags
+    test al, 4
+    jz .nr
+    mov byte [flagbuf + 0], 'R'
+    jmp .w
+.nr:
+    mov byte [flagbuf + 0], '-'
+.w:
+    test al, 2
+    jz .nw
+    mov byte [flagbuf + 1], 'W'
+    jmp .x
+.nw:
+    mov byte [flagbuf + 1], '-'
+.x:
+    test al, 1
+    jz .nx
+    mov byte [flagbuf + 2], 'X'
+    jmp .emit
+.nx:
+    mov byte [flagbuf + 2], '-'
+.emit:
+    lea rsi, [flagbuf]
+    mov rdx, 3
+    call print_str
+    ret
+
+; phdr_type_name - map p_type (eax) to a name pointer (rax)
+phdr_type_name:
+    cmp eax, 0
+    je .null
+    cmp eax, 1
+    je .load
+    cmp eax, 2
+    je .dyn
+    cmp eax, 3
+    je .interp
+    cmp eax, 4
+    je .note
+    cmp eax, 6
+    je .phdr
+    cmp eax, 7
+    je .tls
+    cmp eax, 0x6474e550
+    je .ehframe
+    cmp eax, 0x6474e551
+    je .gnustack
+    cmp eax, 0x6474e552
+    je .gnurelro
+    cmp eax, 0x6474e553
+    je .gnuprop
+    lea rax, [pt_unknown]
+    ret
+.null:     lea rax, [pt_null]
+    ret
+.load:     lea rax, [pt_load]
+    ret
+.dyn:      lea rax, [pt_dynamic]
+    ret
+.interp:   lea rax, [pt_interp]
+    ret
+.note:     lea rax, [pt_note]
+    ret
+.phdr:     lea rax, [pt_phdr]
+    ret
+.tls:      lea rax, [pt_tls]
+    ret
+.ehframe:  lea rax, [pt_ehframe]
+    ret
+.gnustack: lea rax, [pt_gnustack]
+    ret
+.gnurelro: lea rax, [pt_gnurelro]
+    ret
+.gnuprop:  lea rax, [pt_gnuprop]
     ret
 
 ; ---------------------------------------------------------------------------
@@ -492,6 +698,34 @@ print_cstr:                ; in: rsi = pointer
     jmp .len
 .out:
     call print_str
+    ret
+
+; ---------------------------------------------------------------------------
+; print_cstr_pad - print NUL-terminated string (rsi) then pad with spaces to
+; a fixed field width.  in: rsi = pointer, ecx = width (<= 16)
+; Does not clobber r12/r13/r14.
+; ---------------------------------------------------------------------------
+print_cstr_pad:            ; in: rsi = pointer, ecx = width
+    push rbx
+    mov ebx, ecx           ; save width
+    xor rdx, rdx           ; strlen -> rdx
+.pcp_len:
+    cmp byte [rsi + rdx], 0
+    je .pcp_print
+    inc rdx
+    jmp .pcp_len
+.pcp_print:
+    push rdx               ; save len
+    call print_str         ; print rsi, rdx
+    pop rdx
+    mov ecx, ebx           ; pad = width - len
+    sub ecx, edx
+    jle .pcp_done
+    lea rsi, [spaces16]
+    movzx rdx, cx
+    call print_str
+.pcp_done:
+    pop rbx
     ret
 
 ; ---------------------------------------------------------------------------

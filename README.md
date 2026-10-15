@@ -10,7 +10,7 @@ A lightweight ELF64 binary inspector for Linux x86-64, written in NASM assembly.
 - [x] Validate ELF magic and header
 - [x] Identify architecture, file type and endianness
 - [x] Display ELF header information
-- [ ] Parse and display program headers
+- [x] Parse and display program headers
 - [ ] Parse and display section headers
 - [ ] Validate file offsets and structure boundaries
 - [ ] Detect malformed or truncated ELF files
