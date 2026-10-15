@@ -49,14 +49,16 @@ printf 'not an elf file' > "$TMP/plain.txt"
 out="$("$BIN" "$TMP/plain.txt" 2>&1)"; code=$?
 check "non-ELF file rejected" 1 "$code" "not an ELF" "$out"
 
-# 4. Valid ELF (the binary itself) -> valid, exit 0
+# 4. Valid ELF (the binary itself) -> header printed, exit 0
 out="$("$BIN" "$BIN" 2>&1)"; code=$?
-check "valid ELF accepted (self)" 0 "$code" "valid ELF64" "$out"
+check "valid ELF prints header (self)" 0 "$code" "ELF Header:" "$out"
+check "self reported as ELF64"        0 "$code" "ELF64"       "$out"
+check "self machine is x86-64"       0 "$code" "x86-64"      "$out"
 
 # 5. Another known-good system ELF, if available
 if [[ -r /bin/sh ]]; then
     out="$("$BIN" /bin/sh 2>&1)"; code=$?
-    check "valid ELF accepted (/bin/sh)" 0 "$code" "valid ELF64" "$out"
+    check "valid ELF prints header (/bin/sh)" 0 "$code" "ELF Header:" "$out"
 fi
 
 echo
