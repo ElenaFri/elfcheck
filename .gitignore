@@ -1,0 +1,33 @@
+# Build artifacts
+*.o
+*.elf
+*.bin
+/build/
+/dist/
+
+# Debugging and profiling
+core
+core.*
+*.core
+*.prof
+*.gcda
+*.gcno
+
+# Editor and IDE files
+*~
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.log
+*.bak
+
+# Generated test binaries
+/tests/generated/
