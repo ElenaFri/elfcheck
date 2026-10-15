@@ -65,6 +65,28 @@
 %define W_FILESZ    14
 %define W_MEMSZ     14
 
+; ---- section header field offsets (Elf64_Shdr, 64 bytes) ----
+%define SHDR_SIZE    64
+%define SH_NAME      0
+%define SH_TYPE      4
+%define SH_FLAGS     8
+%define SH_ADDR      16
+%define SH_OFFSET    24
+%define SH_SIZE      32
+%define SH_ADDRALIGN 48
+
+; ---- section header table column widths ----
+%define WS_IDX      5
+%define WS_NAME     20
+%define WS_TYPE     16
+%define WS_FLAGS    7
+%define WS_ADDR     14
+%define WS_OFFSET   14
+%define WS_SIZE     14
+
+; max bytes of the section-name string table we buffer
+%define STRTAB_CAP  32768
+
 default rel
 
 ; Print a NUL-terminated string at %1 to stdout.
@@ -150,7 +172,36 @@ section .rodata
     col_filesz:     db "FileSize", 0
     col_memsz:      db "MemSize", 0
     col_align:      db "Align", 0
-    spaces16:       db "                ", 0   ; 16 spaces, for field padding
+    col_name:       db "Name", 0
+    col_addr:       db "Addr", 0
+    col_size:       db "Size", 0
+    spaces:         db "                                ", 0  ; 32 spaces for padding
+    empty_str:      db 0
+
+    ; ---- section header display ----
+    sh_title:       db 10, "Section Headers:", 10, 0
+
+    ; ---- section header type names ----
+    sht_null:       db "NULL", 0
+    sht_progbits:   db "PROGBITS", 0
+    sht_symtab:     db "SYMTAB", 0
+    sht_strtab:     db "STRTAB", 0
+    sht_rela:       db "RELA", 0
+    sht_hash:       db "HASH", 0
+    sht_dynamic:    db "DYNAMIC", 0
+    sht_note:       db "NOTE", 0
+    sht_nobits:     db "NOBITS", 0
+    sht_rel:        db "REL", 0
+    sht_dynsym:     db "DYNSYM", 0
+    sht_init_arr:   db "INIT_ARRAY", 0
+    sht_fini_arr:   db "FINI_ARRAY", 0
+    sht_preinit:    db "PREINIT_ARRAY", 0
+    sht_group:      db "GROUP", 0
+    sht_gnu_hash:   db "GNU_HASH", 0
+    sht_verdef:     db "VERDEF", 0
+    sht_verneed:    db "VERNEED", 0
+    sht_versym:     db "VERSYM", 0
+    sht_unknown:    db "UNKNOWN", 0
 
     ; ---- program header (segment) type names ----
     pt_null:        db "NULL", 0
@@ -169,7 +220,11 @@ section .rodata
 section .bss
     ehdr:           resb EHDR_SIZE     ; full ELF header
     phdr:           resb 64            ; one program header entry (56 used)
+    shdr:           resb 64            ; one section header entry (64 used)
+    strtab:         resb STRTAB_CAP + 1 ; section-name string table (+1 NUL)
+    strtab_size:    resq 1             ; bytes actually loaded into strtab
     flagbuf:        resb 4             ; "RWX" flag string + NUL
+    shflagbuf:      resb 16            ; section flag letters + NUL
     nread:          resq 1             ; bytes actually read
     numbuf:         resb 32            ; scratch for number formatting
 
@@ -208,6 +263,7 @@ _start:
 
     call print_header
     call print_program_headers ; reads segments via fd in r12
+    call print_section_headers ; reads sections via fd in r12
 
     mov rdi, r12            ; close fd
     mov rax, SYS_CLOSE
@@ -549,6 +605,314 @@ phdr_type_name:
     ret
 
 ; ---------------------------------------------------------------------------
+; print_section_headers - iterate and display the section header table.
+; First loads the section-name string table, then prints one row per section.
+; Registers: r12=fd (preserved), r13=index, r14=shnum.
+; ---------------------------------------------------------------------------
+print_section_headers:
+    movzx r14d, word [ehdr + E_SHNUM]
+    test r14, r14
+    jz .psh_ret
+
+    call load_shstrtab
+    PRINT sh_title
+    call print_sh_colhdr
+    xor r13, r13               ; i = 0
+.psh_loop:
+    cmp r13, r14
+    jae .psh_ret
+
+    movzx eax, word [ehdr + E_SHENTSIZE]
+    imul rax, r13              ; i * shentsize
+    add rax, [ehdr + E_SHOFF]  ; file offset of entry i
+
+    mov rdi, r12               ; lseek(fd, offset, SEEK_SET)
+    mov rsi, rax
+    xor edx, edx
+    mov rax, SYS_LSEEK
+    syscall
+
+    mov rdi, r12               ; read(fd, shdr, SHDR_SIZE)
+    lea rsi, [shdr]
+    mov rdx, SHDR_SIZE
+    mov rax, SYS_READ
+    syscall
+    cmp rax, SHDR_SIZE
+    jl .psh_ret                ; short read -> stop
+
+    call print_one_shdr
+    inc r13
+    jmp .psh_loop
+.psh_ret:
+    ret
+
+; load_shstrtab - read the section-name string table (section shstrndx) into
+;                 [strtab]; number of bytes stored in [strtab_size] (0 on none)
+load_shstrtab:
+    mov qword [strtab_size], 0
+    movzx eax, word [ehdr + E_SHSTRNDX]
+    test eax, eax
+    jz .lss_ret                ; no string table
+
+    movzx ecx, word [ehdr + E_SHENTSIZE]
+    imul rax, rcx              ; shstrndx * shentsize
+    add rax, [ehdr + E_SHOFF]
+
+    mov rdi, r12               ; lseek to that section header
+    mov rsi, rax
+    xor edx, edx
+    mov rax, SYS_LSEEK
+    syscall
+
+    mov rdi, r12               ; read its 64-byte header into shdr
+    lea rsi, [shdr]
+    mov rdx, SHDR_SIZE
+    mov rax, SYS_READ
+    syscall
+    cmp rax, SHDR_SIZE
+    jl .lss_ret
+
+    mov rdx, [shdr + SH_SIZE]  ; clamp request to STRTAB_CAP
+    cmp rdx, STRTAB_CAP
+    jbe .lss_cap
+    mov rdx, STRTAB_CAP
+.lss_cap:
+    mov rdi, r12               ; lseek to the table data
+    mov rsi, [shdr + SH_OFFSET]
+    push rdx
+    xor edx, edx
+    mov rax, SYS_LSEEK
+    syscall
+    pop rdx
+
+    mov rdi, r12               ; read the table bytes
+    lea rsi, [strtab]
+    mov rax, SYS_READ
+    syscall
+    test rax, rax
+    js .lss_ret                ; error -> size stays 0
+    mov [strtab_size], rax
+    lea rsi, [strtab]          ; guarantee NUL termination
+    mov byte [rsi + rax], 0
+.lss_ret:
+    ret
+
+; section_name_ptr - out: rsi -> name string for the current [shdr]
+section_name_ptr:
+    mov eax, dword [shdr + SH_NAME]
+    cmp rax, [strtab_size]
+    jae .sn_empty
+    lea rsi, [strtab]
+    add rsi, rax
+    ret
+.sn_empty:
+    lea rsi, [empty_str]
+    ret
+
+; print the aligned section-table column header row
+print_sh_colhdr:
+    PRINT two_spaces
+    lea rsi, [col_idx]
+    mov ecx, WS_IDX
+    call print_cstr_pad
+    lea rsi, [col_name]
+    mov ecx, WS_NAME
+    call print_cstr_pad
+    lea rsi, [col_type]
+    mov ecx, WS_TYPE
+    call print_cstr_pad
+    lea rsi, [col_flags]
+    mov ecx, WS_FLAGS
+    call print_cstr_pad
+    lea rsi, [col_addr]
+    mov ecx, WS_ADDR
+    call print_cstr_pad
+    lea rsi, [col_offset]
+    mov ecx, WS_OFFSET
+    call print_cstr_pad
+    lea rsi, [col_size]
+    mov ecx, WS_SIZE
+    call print_cstr_pad
+    PRINT col_align
+    PRINT nl
+    ret
+
+; print one section header entry from [shdr] as an aligned table row
+print_one_shdr:
+    PRINT two_spaces
+
+    mov rax, r13               ; index
+    mov ecx, WS_IDX
+    call pfield_dec
+
+    call section_name_ptr      ; rsi -> name
+    mov ecx, WS_NAME
+    call print_cstr_pad
+
+    mov eax, dword [shdr + SH_TYPE]
+    call shdr_type_name
+    mov rsi, rax
+    mov ecx, WS_TYPE
+    call print_cstr_pad
+
+    mov rax, [shdr + SH_FLAGS]
+    call build_sh_flags
+    lea rsi, [shflagbuf]
+    mov ecx, WS_FLAGS
+    call print_cstr_pad
+
+    mov rax, [shdr + SH_ADDR]
+    mov ecx, WS_ADDR
+    call pfield_hex
+
+    mov rax, [shdr + SH_OFFSET]
+    mov ecx, WS_OFFSET
+    call pfield_hex
+
+    mov rax, [shdr + SH_SIZE]
+    mov ecx, WS_SIZE
+    call pfield_hex
+
+    mov rax, [shdr + SH_ADDRALIGN]  ; last column, no padding
+    call print_hex
+
+    PRINT nl
+    ret
+
+; build_sh_flags - render sh_flags (rax) into shflagbuf as NUL-terminated
+;                  readelf-style letters (W A X M S I L G T)
+build_sh_flags:                ; in: rax = flags
+    lea rdi, [shflagbuf]
+    test rax, 0x1
+    jz .a
+    mov byte [rdi], 'W'
+    inc rdi
+.a:
+    test rax, 0x2
+    jz .x
+    mov byte [rdi], 'A'
+    inc rdi
+.x:
+    test rax, 0x4
+    jz .m
+    mov byte [rdi], 'X'
+    inc rdi
+.m:
+    test rax, 0x10
+    jz .s
+    mov byte [rdi], 'M'
+    inc rdi
+.s:
+    test rax, 0x20
+    jz .i
+    mov byte [rdi], 'S'
+    inc rdi
+.i:
+    test rax, 0x40
+    jz .l
+    mov byte [rdi], 'I'
+    inc rdi
+.l:
+    test rax, 0x80
+    jz .g
+    mov byte [rdi], 'L'
+    inc rdi
+.g:
+    test rax, 0x200
+    jz .t
+    mov byte [rdi], 'G'
+    inc rdi
+.t:
+    test rax, 0x400
+    jz .bf_done
+    mov byte [rdi], 'T'
+    inc rdi
+.bf_done:
+    mov byte [rdi], 0
+    ret
+
+; shdr_type_name - map sh_type (eax) to a name pointer (rax)
+shdr_type_name:
+    cmp eax, 0
+    je .null
+    cmp eax, 1
+    je .progbits
+    cmp eax, 2
+    je .symtab
+    cmp eax, 3
+    je .strtab
+    cmp eax, 4
+    je .rela
+    cmp eax, 5
+    je .hash
+    cmp eax, 6
+    je .dynamic
+    cmp eax, 7
+    je .note
+    cmp eax, 8
+    je .nobits
+    cmp eax, 9
+    je .rel
+    cmp eax, 11
+    je .dynsym
+    cmp eax, 14
+    je .init_arr
+    cmp eax, 15
+    je .fini_arr
+    cmp eax, 16
+    je .preinit
+    cmp eax, 17
+    je .group
+    cmp eax, 0x6ffffff6
+    je .gnu_hash
+    cmp eax, 0x6ffffffd
+    je .verdef
+    cmp eax, 0x6ffffffe
+    je .verneed
+    cmp eax, 0x6fffffff
+    je .versym
+    lea rax, [sht_unknown]
+    ret
+.null:     lea rax, [sht_null]
+    ret
+.progbits: lea rax, [sht_progbits]
+    ret
+.symtab:   lea rax, [sht_symtab]
+    ret
+.strtab:   lea rax, [sht_strtab]
+    ret
+.rela:     lea rax, [sht_rela]
+    ret
+.hash:     lea rax, [sht_hash]
+    ret
+.dynamic:  lea rax, [sht_dynamic]
+    ret
+.note:     lea rax, [sht_note]
+    ret
+.nobits:   lea rax, [sht_nobits]
+    ret
+.rel:      lea rax, [sht_rel]
+    ret
+.dynsym:   lea rax, [sht_dynsym]
+    ret
+.init_arr: lea rax, [sht_init_arr]
+    ret
+.fini_arr: lea rax, [sht_fini_arr]
+    ret
+.preinit:  lea rax, [sht_preinit]
+    ret
+.group:    lea rax, [sht_group]
+    ret
+.gnu_hash: lea rax, [sht_gnu_hash]
+    ret
+.verdef:   lea rax, [sht_verdef]
+    ret
+.verneed:  lea rax, [sht_verneed]
+    ret
+.versym:   lea rax, [sht_versym]
+    ret
+
+; ---------------------------------------------------------------------------
 ; Enum -> name lookups.  in: eax = value   out: rax = pointer to NUL string
 ; ---------------------------------------------------------------------------
 class_name:
@@ -789,7 +1153,7 @@ print_cstr_pad:            ; in: rsi = pointer, ecx = width
     mov ecx, ebx           ; pad = width - len
     sub ecx, edx
     jle .pcp_done
-    lea rsi, [spaces16]
+    lea rsi, [spaces]
     movzx rdx, cx
     call print_str
 .pcp_done:

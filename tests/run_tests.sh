@@ -56,6 +56,8 @@ check "self reported as ELF64"        0 "$code" "ELF64"       "$out"
 check "self machine is x86-64"       0 "$code" "x86-64"      "$out"
 check "self lists program headers"   0 "$code" "Program Headers:" "$out"
 check "self has a LOAD segment"      0 "$code" "LOAD"        "$out"
+check "self lists section headers"   0 "$code" "Section Headers:" "$out"
+check "self has a .text section"     0 "$code" ".text"       "$out"
 
 # 5. Another known-good system ELF, if available
 if [[ -r /bin/sh ]]; then
