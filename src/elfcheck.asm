@@ -7,8 +7,9 @@
 ; section headers will build on top of this.
 ;
 ; Exit codes:
-;   0  valid ELF, header displayed
+;   0  valid ELF, no structural issues detected
 ;   1  usage error / cannot open / cannot read / not an ELF / truncated header
+;   2  valid ELF header, but structural inconsistencies were found
 
 ; ---- Linux x86-64 syscall numbers ----
 %define SYS_READ   0
@@ -19,6 +20,7 @@
 %define SYS_EXIT   60
 
 %define SEEK_SET   0
+%define SEEK_END   2
 
 ; ---- File descriptors ----
 %define STDOUT     1
@@ -203,6 +205,28 @@ section .rodata
     sht_versym:     db "VERSYM", 0
     sht_unknown:    db "UNKNOWN", 0
 
+    ; ---- structural validation ----
+    val_title:      db 10, "Validation:", 10, 0
+    val_mark:       db "  [!] ", 0
+    val_ok:         db "  [ok] no structural issues detected", 10, 0
+    m_ehsize:       db "unexpected e_ehsize=", 0
+    m_exp64:        db " (expected 64)", 0
+    m_phentsize:    db "unexpected e_phentsize=", 0
+    m_exp56:        db " (expected 56)", 0
+    m_shentsize:    db "unexpected e_shentsize=", 0
+    m_shstrndx:     db "e_shstrndx=", 0
+    m_oorange:      db " out of range (shnum=", 0
+    m_phtab:        db "program header table extends past end of file", 10, 0
+    m_shtab:        db "section header table extends past end of file", 10, 0
+    m_seg:          db "segment ", 0
+    m_sect:         db "section ", 0
+    m_past_off:     db " extends past end of file (off=", 0
+    m_filesz:       db " filesz=", 0
+    m_size:         db " size=", 0
+    m_fmgt:         db " has p_filesz > p_memsz", 0
+    m_rparen:       db ")", 0
+    m_issues:       db " issue(s) found", 10, 0
+
     ; ---- program header (segment) type names ----
     pt_null:        db "NULL", 0
     pt_load:        db "LOAD", 0
@@ -223,6 +247,8 @@ section .bss
     shdr:           resb 64            ; one section header entry (64 used)
     strtab:         resb STRTAB_CAP + 1 ; section-name string table (+1 NUL)
     strtab_size:    resq 1             ; bytes actually loaded into strtab
+    filesize:       resq 1             ; total file size (bytes)
+    issues:         resq 1             ; count of structural problems found
     flagbuf:        resb 4             ; "RWX" flag string + NUL
     shflagbuf:      resb 16            ; section flag letters + NUL
     nread:          resq 1             ; bytes actually read
@@ -264,11 +290,15 @@ _start:
     call print_header
     call print_program_headers ; reads segments via fd in r12
     call print_section_headers ; reads sections via fd in r12
+    call validate_structure    ; sanity-check offsets, counts [issues]
 
     mov rdi, r12            ; close fd
     mov rax, SYS_CLOSE
     syscall
-    xor edi, edi
+    xor edi, edi            ; exit 0 if no structural issues...
+    cmp qword [issues], 0
+    je .exit
+    mov edi, 2              ; ...else exit 2
     jmp .exit
 
 .invalid:
@@ -910,6 +940,238 @@ shdr_type_name:
 .verneed:  lea rax, [sht_verneed]
     ret
 .versym:   lea rax, [sht_versym]
+    ret
+
+; ---------------------------------------------------------------------------
+; validate_structure - sanity-check header fields, segment and section file
+; ranges against the real file size; report every problem and count them in
+; [issues].  Uses fd in r12; r13=index, r14=count.
+; ---------------------------------------------------------------------------
+validate_structure:
+    PRINT val_title
+    mov qword [issues], 0
+
+    mov rdi, r12               ; file size = lseek(fd, 0, SEEK_END)
+    xor esi, esi
+    mov edx, SEEK_END
+    mov rax, SYS_LSEEK
+    syscall
+    mov [filesize], rax
+    test rax, rax
+    jns .size_ok
+    mov rax, 0x7fffffffffffffff   ; error: don't flag everything
+    mov [filesize], rax
+.size_ok:
+
+    ; --- e_ehsize == 64 ---
+    movzx eax, word [ehdr + E_EHSIZE]
+    cmp eax, EHDR_SIZE
+    je .chk_phentsize
+    PRINT val_mark
+    PRINT m_ehsize
+    movzx eax, word [ehdr + E_EHSIZE]
+    call print_dec
+    PRINT m_exp64
+    PRINT nl
+    inc qword [issues]
+.chk_phentsize:
+    ; --- e_phentsize == 56 when phnum > 0 ---
+    movzx eax, word [ehdr + E_PHNUM]
+    test eax, eax
+    jz .chk_shentsize
+    movzx eax, word [ehdr + E_PHENTSIZE]
+    cmp eax, PHDR_SIZE
+    je .chk_shentsize
+    PRINT val_mark
+    PRINT m_phentsize
+    movzx eax, word [ehdr + E_PHENTSIZE]
+    call print_dec
+    PRINT m_exp56
+    PRINT nl
+    inc qword [issues]
+.chk_shentsize:
+    ; --- e_shentsize == 64 when shnum > 0 ---
+    movzx eax, word [ehdr + E_SHNUM]
+    test eax, eax
+    jz .chk_shstrndx
+    movzx eax, word [ehdr + E_SHENTSIZE]
+    cmp eax, SHDR_SIZE
+    je .chk_shstrndx
+    PRINT val_mark
+    PRINT m_shentsize
+    movzx eax, word [ehdr + E_SHENTSIZE]
+    call print_dec
+    PRINT m_exp64
+    PRINT nl
+    inc qword [issues]
+.chk_shstrndx:
+    ; --- e_shstrndx < shnum (ignore SHN_XINDEX 0xffff) ---
+    movzx eax, word [ehdr + E_SHNUM]
+    test eax, eax
+    jz .chk_phtab
+    movzx eax, word [ehdr + E_SHSTRNDX]
+    cmp eax, 0xffff
+    je .chk_phtab
+    movzx ecx, word [ehdr + E_SHNUM]
+    cmp eax, ecx
+    jb .chk_phtab
+    PRINT val_mark
+    PRINT m_shstrndx
+    movzx eax, word [ehdr + E_SHSTRNDX]
+    call print_dec
+    PRINT m_oorange
+    movzx eax, word [ehdr + E_SHNUM]
+    call print_dec
+    PRINT m_rparen
+    PRINT nl
+    inc qword [issues]
+.chk_phtab:
+    ; --- program header table within file ---
+    movzx eax, word [ehdr + E_PHNUM]
+    test eax, eax
+    jz .chk_shtab
+    movzx ecx, word [ehdr + E_PHENTSIZE]
+    imul rax, rcx
+    add rax, [ehdr + E_PHOFF]
+    jc .phtab_bad
+    cmp rax, [filesize]
+    jbe .chk_shtab
+.phtab_bad:
+    PRINT val_mark
+    PRINT m_phtab
+    inc qword [issues]
+.chk_shtab:
+    ; --- section header table within file ---
+    movzx eax, word [ehdr + E_SHNUM]
+    test eax, eax
+    jz .chk_segments
+    movzx ecx, word [ehdr + E_SHENTSIZE]
+    imul rax, rcx
+    add rax, [ehdr + E_SHOFF]
+    jc .shtab_bad
+    cmp rax, [filesize]
+    jbe .chk_segments
+.shtab_bad:
+    PRINT val_mark
+    PRINT m_shtab
+    inc qword [issues]
+.chk_segments:
+    ; --- per-segment file range checks ---
+    movzx r14d, word [ehdr + E_PHNUM]
+    xor r13, r13
+.vp_loop:
+    cmp r13, r14
+    jae .chk_sections
+    movzx eax, word [ehdr + E_PHENTSIZE]
+    imul rax, r13
+    add rax, [ehdr + E_PHOFF]
+    mov rdi, r12
+    mov rsi, rax
+    xor edx, edx
+    mov rax, SYS_LSEEK
+    syscall
+    mov rdi, r12
+    lea rsi, [phdr]
+    mov rdx, PHDR_SIZE
+    mov rax, SYS_READ
+    syscall
+    cmp rax, PHDR_SIZE
+    jl .chk_sections
+    ; offset + filesz <= filesize ?
+    mov rax, [phdr + P_OFFSET]
+    add rax, [phdr + P_FILESZ]
+    jc .vp_past
+    cmp rax, [filesize]
+    jbe .vp_memcheck
+.vp_past:
+    PRINT val_mark
+    PRINT m_seg
+    mov rax, r13
+    call print_dec
+    PRINT m_past_off
+    mov rax, [phdr + P_OFFSET]
+    call print_hex
+    PRINT m_filesz
+    mov rax, [phdr + P_FILESZ]
+    call print_hex
+    PRINT m_rparen
+    PRINT nl
+    inc qword [issues]
+.vp_memcheck:
+    ; filesz <= memsz ?
+    mov rax, [phdr + P_FILESZ]
+    cmp rax, [phdr + P_MEMSZ]
+    jbe .vp_next
+    PRINT val_mark
+    PRINT m_seg
+    mov rax, r13
+    call print_dec
+    PRINT m_fmgt
+    PRINT nl
+    inc qword [issues]
+.vp_next:
+    inc r13
+    jmp .vp_loop
+.chk_sections:
+    ; --- per-section file range checks ---
+    movzx r14d, word [ehdr + E_SHNUM]
+    xor r13, r13
+.vs_loop:
+    cmp r13, r14
+    jae .summary
+    movzx eax, word [ehdr + E_SHENTSIZE]
+    imul rax, r13
+    add rax, [ehdr + E_SHOFF]
+    mov rdi, r12
+    mov rsi, rax
+    xor edx, edx
+    mov rax, SYS_LSEEK
+    syscall
+    mov rdi, r12
+    lea rsi, [shdr]
+    mov rdx, SHDR_SIZE
+    mov rax, SYS_READ
+    syscall
+    cmp rax, SHDR_SIZE
+    jl .summary
+    ; skip SHT_NULL (0) and SHT_NOBITS (8): no file content
+    mov eax, dword [shdr + SH_TYPE]
+    cmp eax, 0
+    je .vs_next
+    cmp eax, 8
+    je .vs_next
+    mov rax, [shdr + SH_OFFSET]
+    add rax, [shdr + SH_SIZE]
+    jc .vs_past
+    cmp rax, [filesize]
+    jbe .vs_next
+.vs_past:
+    PRINT val_mark
+    PRINT m_sect
+    mov rax, r13
+    call print_dec
+    PRINT m_past_off
+    mov rax, [shdr + SH_OFFSET]
+    call print_hex
+    PRINT m_size
+    mov rax, [shdr + SH_SIZE]
+    call print_hex
+    PRINT m_rparen
+    PRINT nl
+    inc qword [issues]
+.vs_next:
+    inc r13
+    jmp .vs_loop
+.summary:
+    cmp qword [issues], 0
+    jne .some
+    PRINT val_ok
+    ret
+.some:
+    PRINT two_spaces
+    mov rax, [issues]
+    call print_dec
+    PRINT m_issues
     ret
 
 ; ---------------------------------------------------------------------------

@@ -12,9 +12,9 @@ A lightweight ELF64 binary inspector for Linux x86-64, written in NASM assembly.
 - [x] Display ELF header information
 - [x] Parse and display program headers
 - [x] Parse and display section headers
-- [ ] Validate file offsets and structure boundaries
-- [ ] Detect malformed or truncated ELF files
-- [ ] Report structural inconsistencies
+- [x] Validate file offsets and structure boundaries
+- [x] Detect malformed or truncated ELF files
+- [x] Report structural inconsistencies
 - [ ] Export analysis results as JSON
 - [ ] Add automated tests with valid and malformed ELF files
 - [ ] Disassemble machine code sections

@@ -58,12 +58,19 @@ check "self lists program headers"   0 "$code" "Program Headers:" "$out"
 check "self has a LOAD segment"      0 "$code" "LOAD"        "$out"
 check "self lists section headers"   0 "$code" "Section Headers:" "$out"
 check "self has a .text section"     0 "$code" ".text"       "$out"
+check "self passes validation"       0 "$code" "no structural issues" "$out"
 
 # 5. Another known-good system ELF, if available
 if [[ -r /bin/sh ]]; then
     out="$("$BIN" /bin/sh 2>&1)"; code=$?
     check "valid ELF prints header (/bin/sh)" 0 "$code" "ELF Header:" "$out"
 fi
+
+# 6. Malformed (truncated) ELF -> structural issues reported, exit 2
+head -c 8192 "$BIN" > "$TMP/truncated.elf"
+out="$("$BIN" "$TMP/truncated.elf" 2>&1)"; code=$?
+check "truncated ELF flagged"        2 "$code" "issue(s) found"  "$out"
+check "truncated ELF reports marker" 2 "$code" "[!]"            "$out"
 
 echo
 echo "Results: $pass passed, $fail failed"
