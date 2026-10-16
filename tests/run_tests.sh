@@ -29,6 +29,26 @@ check() {
     fi
 }
 
+# write_le <file> <offset> <value> <nbytes>
+# Overwrite nbytes at offset with value, little-endian, in place.
+write_le() {
+    local file="$1" off="$2" val="$3" n="$4" i byte
+    for ((i = 0; i < n; i++)); do
+        byte=$(( (val >> (8 * i)) & 0xff ))
+        printf "\\x$(printf %02x "$byte")" |
+            dd of="$file" bs=1 seek=$((off + i)) count=1 conv=notrunc status=none 2>/dev/null
+    done
+}
+
+# corrupt_copy <name> <offset> <value> <nbytes> -> echoes path of a corrupted
+# copy of $BIN (a known-good ELF) with one field overwritten.
+corrupt_copy() {
+    local path="$TMP/$1"
+    cp "$BIN" "$path"
+    write_le "$path" "$2" "$3" "$4"
+    echo "$path"
+}
+
 if [[ ! -x "$BIN" ]]; then
     echo "error: $BIN not found or not executable (run 'make' first)" >&2
     exit 1
@@ -71,6 +91,23 @@ head -c 8192 "$BIN" > "$TMP/truncated.elf"
 out="$("$BIN" "$TMP/truncated.elf" 2>&1)"; code=$?
 check "truncated ELF flagged"        2 "$code" "issue(s) found"  "$out"
 check "truncated ELF reports marker" 2 "$code" "[!]"            "$out"
+
+# 6b. Corrupted header fields (ELF64 offsets): each must be flagged, exit 2.
+#     A fresh unmodified copy must still validate cleanly (control).
+out="$("$BIN" "$(corrupt_copy control.elf 0 0 0)" 2>&1)"; code=$?
+check "unmodified copy validates"    0 "$code" "no structural issues" "$out"
+
+out="$("$BIN" "$(corrupt_copy ehsize.elf 52 0 2)" 2>&1)"; code=$?
+check "bad e_ehsize detected"        2 "$code" "e_ehsize"        "$out"
+
+out="$("$BIN" "$(corrupt_copy shstrndx.elf 62 254 2)" 2>&1)"; code=$?
+check "bad e_shstrndx detected"      2 "$code" "e_shstrndx"      "$out"
+
+out="$("$BIN" "$(corrupt_copy shoff.elf 40 4000000000 8)" 2>&1)"; code=$?
+check "bad e_shoff detected"         2 "$code" "section header table extends" "$out"
+
+out="$("$BIN" "$(corrupt_copy phoff.elf 32 4000000000 8)" 2>&1)"; code=$?
+check "bad e_phoff detected"         2 "$code" "program header table extends" "$out"
 
 # 7. JSON output mode
 out="$("$BIN" --json "$BIN" 2>&1)"; code=$?

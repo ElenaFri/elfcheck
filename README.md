@@ -16,7 +16,7 @@ A lightweight ELF64 binary inspector for Linux x86-64, written in NASM assembly.
 - [x] Detect malformed or truncated ELF files
 - [x] Report structural inconsistencies
 - [x] Export analysis results as JSON
-- [ ] Add automated tests with valid and malformed ELF files
+- [x] Add automated tests with valid and malformed ELF files
 - [ ] Disassemble machine code sections
 - [ ] Display assembly instructions with addresses and opcodes
 - [ ] Detect potentially suspicious ELF properties
