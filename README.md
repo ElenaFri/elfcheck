@@ -75,6 +75,20 @@ The disassembly can be long; pipe it through a pager or the usual filters:
 ./elfcheck -d <file> | grep call
 ```
 
+By default the report prints every section. Pass one or more **section filters**
+to show only what you need (handy to keep the output short):
+
+```bash
+./elfcheck --hardening <file>            # just the hardening report
+./elfcheck --header --dynamic <file>     # header + dynamic linking only
+```
+
+Available filters: `--header`, `--segments`, `--sections`, `--validate`,
+`--security`, `--dynamic`, `--hardening`. Structural validation always runs so
+the exit code stays meaningful, even when its section is hidden. Filters apply to
+the default text report; `--json` always emits the complete object. Use
+`--help` (or `-h`) to list every option.
+
 The default report ends with a `Security:` section that flags common red flags:
 writable and executable (`W^X`) `PT_LOAD` segments and sections, stack
 executability via `PT_GNU_STACK`, an entry point that falls outside any

@@ -29,6 +29,20 @@ check() {
     fi
 }
 
+check_absent() {
+    # check_absent <description> <expected_exit> <actual_exit> <forbidden_substr> <actual_output>
+    local desc="$1" exp_code="$2" act_code="$3" bad_sub="$4" out="$5"
+    if [[ "$act_code" == "$exp_code" && "$out" != *"$bad_sub"* ]]; then
+        echo "  PASS: $desc"
+        pass=$((pass + 1))
+    else
+        echo "  FAIL: $desc"
+        echo "        expected exit=$exp_code without substr='$bad_sub'"
+        echo "        got      exit=$act_code output='$out'"
+        fail=$((fail + 1))
+    fi
+}
+
 # write_le <file> <offset> <value> <nbytes>
 # Overwrite nbytes at offset with value, little-endian, in place.
 write_le() {
@@ -302,6 +316,38 @@ if command -v gcc >/dev/null 2>&1; then
         check "hardening detects RUNPATH"  0 "$code" "RUNPATH:       /opt/y" "$out"
     fi
 fi
+
+# 12. CLI section filters and help
+out="$("$BIN" --help 2>&1)"; code=$?
+check "--help prints usage, exit 0"       0 "$code" "Usage:" "$out"
+out="$("$BIN" -h 2>&1)"; code=$?
+check "-h alias prints usage, exit 0"     0 "$code" "Usage:" "$out"
+
+# --header shows only the ELF header
+out="$("$BIN" --header "$BIN" 2>&1)"; code=$?
+check        "--header shows header"        0 "$code" "ELF Header:" "$out"
+check_absent "--header hides hardening"     0 "$code" "Hardening:"  "$out"
+check_absent "--header hides sections"      0 "$code" "Section Headers:" "$out"
+
+# --hardening shows only the hardening report
+out="$("$BIN" --hardening "$BIN" 2>&1)"; code=$?
+check        "--hardening shows hardening"   0 "$code" "Hardening:"  "$out"
+check_absent "--hardening hides header"      0 "$code" "ELF Header:" "$out"
+
+# filters combine
+out="$("$BIN" --header --hardening "$BIN" 2>&1)"; code=$?
+check "combined filters: header"          0 "$code" "ELF Header:" "$out"
+check "combined filters: hardening"       0 "$code" "Hardening:"  "$out"
+
+# a filter still yields the right exit code on a malformed file
+# (validation runs silently even when its section is not displayed)
+out="$("$BIN" --hardening "$TMP/truncated.elf" 2>&1)"; code=$?
+check "filter keeps exit code on malformed" 2 "$code" "" "$out"
+
+# no filter still shows every section (default behaviour unchanged)
+out="$("$BIN" "$BIN" 2>&1)"; code=$?
+check "default shows header"              0 "$code" "ELF Header:" "$out"
+check "default shows hardening"           0 "$code" "Hardening:"  "$out"
 
 echo
 echo "Results: $pass passed, $fail failed"

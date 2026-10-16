@@ -75,6 +75,16 @@
 %define DF_BIND_NOW  0x8
 %define DF_1_NOW     0x1
 
+; ---- section-selection filter bits (0 = no filter = show everything) ----
+%define FILT_HEADER    1
+%define FILT_SEGMENTS  2
+%define FILT_SECTIONS  4
+%define FILT_VALIDATE  8
+%define FILT_SECURITY  16
+%define FILT_DYNAMIC   32
+%define FILT_HARDENING 64
+%define FILT_ALL       0x7f
+
 ; ---- program header table column widths ----
 %define W_IDX       5
 %define W_TYPE      15
@@ -147,13 +157,52 @@ default rel
     call vprint
 %endmacro
 
+; Argument-parsing helpers, expanded inside _start (rcx=i, r9=&argv[0]).
+; MODEARG: if argv[i] == %1, set byte [%2]=1 and advance to the next arg.
+%macro MODEARG 2
+    mov rsi, [r9 + rcx*8]
+    lea rdi, [%1]
+    call streq
+    test al, al
+    jz %%skip
+    mov byte [%2], 1
+    jmp .arg_next
+%%skip:
+%endmacro
+
+; FILTARG: if argv[i] == %1, OR the filter bit %2 into [filter_mask] and advance.
+%macro FILTARG 2
+    mov rsi, [r9 + rcx*8]
+    lea rdi, [%1]
+    call streq
+    test al, al
+    jz %%skip
+    or byte [filter_mask], %2
+    jmp .arg_next
+%%skip:
+%endmacro
+
 section .rodata
     elf_magic:      db 0x7f, 'E', 'L', 'F'
 
-    usage_msg:      db "Usage: elfcheck [--json] <file>", 10
+    usage_msg:      db "Usage: elfcheck [options] <file>", 10
+                    db "  Output modes:   --json   --disasm | -d", 10
+                    db "  Section filters: --header --segments --sections --validate", 10
+                    db "                   --security --dynamic --hardening", 10
+                    db "                   (none given = show all sections)", 10
+                    db "  --help | -h     show this help", 10
     usage_len:      equ $ - usage_msg
 
     opt_json:       db "--json", 0
+    opt_header:     db "--header", 0
+    opt_segments:   db "--segments", 0
+    opt_sections:   db "--sections", 0
+    opt_validate:   db "--validate", 0
+    opt_security:   db "--security", 0
+    opt_dynamic:    db "--dynamic", 0
+    opt_hardening:  db "--hardening", 0
+    opt_help:       db "--help", 0
+    opt_help_s:     db "-h", 0
 
     open_err_msg:   db "elfcheck: error: cannot open file", 10
     open_err_len:   equ $ - open_err_msg
@@ -678,6 +727,9 @@ section .bss
     numbuf:         resb 32            ; scratch for number formatting
     json_mode:      resb 1             ; 1 = emit JSON instead of text
     disasm_mode:    resb 1             ; 1 = disassemble .text instead of report
+    help_mode:      resb 1             ; 1 = --help/-h given
+    filter_mask:    resb 1             ; selected section bits (0 = show all)
+    eff_mask:       resb 1             ; effective mask used while printing
     silent:         resb 1             ; 1 = validate_structure suppresses output
     jbuf:           resb 8             ; scratch for JSON byte escaping
 
@@ -740,45 +792,46 @@ section .text
     global _start
 
 _start:
-    ; --- parse arguments: optional --json flag plus exactly one path ---
+    ; --- parse arguments: output-mode and section-filter flags + one path ---
     mov r8, [rsp]              ; argc
     lea r9, [rsp + 8]         ; &argv[0]
     xor r10, r10              ; path pointer (NULL until found)
     mov byte [json_mode], 0
     mov byte [disasm_mode], 0
+    mov byte [help_mode], 0
+    mov byte [filter_mask], 0
     mov rcx, 1               ; i = 1 (skip argv[0])
 .arg_loop:
     cmp rcx, r8
     jae .args_done
-    mov rsi, [r9 + rcx*8]     ; argv[i]
-    lea rdi, [opt_json]
-    call streq               ; al = 1 if argv[i] == "--json"
-    test al, al
-    jnz .arg_json
-    mov rsi, [r9 + rcx*8]
-    lea rdi, [opt_disasm]
-    call streq
-    test al, al
-    jnz .arg_disasm
-    mov rsi, [r9 + rcx*8]
-    lea rdi, [opt_disasm_s]
-    call streq
-    test al, al
-    jnz .arg_disasm
+    MODEARG opt_json,     json_mode
+    MODEARG opt_disasm,   disasm_mode
+    MODEARG opt_disasm_s, disasm_mode
+    MODEARG opt_help,     help_mode
+    MODEARG opt_help_s,   help_mode
+    FILTARG opt_header,    FILT_HEADER
+    FILTARG opt_segments,  FILT_SEGMENTS
+    FILTARG opt_sections,  FILT_SECTIONS
+    FILTARG opt_validate,  FILT_VALIDATE
+    FILTARG opt_security,  FILT_SECURITY
+    FILTARG opt_dynamic,   FILT_DYNAMIC
+    FILTARG opt_hardening, FILT_HARDENING
     mov rsi, [r9 + rcx*8]
     test r10, r10            ; otherwise it's the path (only one allowed)
     jnz .usage
     mov r10, rsi
-    jmp .arg_next
-.arg_json:
-    mov byte [json_mode], 1
-    jmp .arg_next
-.arg_disasm:
-    mov byte [disasm_mode], 1
 .arg_next:
     inc rcx
     jmp .arg_loop
 .args_done:
+    cmp byte [help_mode], 0  ; --help prints usage to stdout and exits 0
+    je .need_path
+    lea rsi, [usage_msg]
+    mov rdx, usage_len
+    call print_str
+    xor edi, edi
+    jmp .exit
+.need_path:
     test r10, r10            ; a path is required
     jz .usage
 
@@ -811,12 +864,46 @@ _start:
     jne .emit_disasm
     cmp byte [json_mode], 0
     jne .emit_json
+    ; --- text report: run only the selected sections (empty mask = all) ---
+    movzx eax, byte [filter_mask]
+    test al, al
+    jnz .mask_set
+    mov al, FILT_ALL
+.mask_set:
+    mov [eff_mask], al
+    test byte [eff_mask], FILT_HEADER
+    jz .f_seg
     call print_header
+.f_seg:
+    test byte [eff_mask], FILT_SEGMENTS
+    jz .f_sec
     call print_program_headers ; reads segments via fd in r12
+.f_sec:
+    test byte [eff_mask], FILT_SECTIONS
+    jz .f_val
     call print_section_headers ; reads sections via fd in r12
+.f_val:
+    ; validation always runs so the exit code stays meaningful; it prints
+    ; only when selected, otherwise it just counts [issues] silently.
+    test byte [eff_mask], FILT_VALIDATE
+    jnz .f_val_loud
+    mov byte [silent], 1
+    call validate_structure
+    mov byte [silent], 0
+    jmp .f_sec_check
+.f_val_loud:
     call validate_structure    ; sanity-check offsets, counts [issues]
+.f_sec_check:
+    test byte [eff_mask], FILT_SECURITY
+    jz .f_dyn
     call check_security        ; segment perms + stack exec, counts [warnings]
+.f_dyn:
+    test byte [eff_mask], FILT_DYNAMIC
+    jz .f_hard
     call analyze_dynamic       ; needed libraries + imported symbols
+.f_hard:
+    test byte [eff_mask], FILT_HARDENING
+    jz .after_output
     call check_hardening       ; exploit-mitigation posture (checksec-style)
     jmp .after_output
 .emit_json:
