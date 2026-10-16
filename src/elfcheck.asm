@@ -80,6 +80,8 @@
 %define SH_OFFSET    24
 %define SH_SIZE      32
 %define SH_ADDRALIGN 48
+%define SHF_WRITE    0x1
+%define SHF_EXECINSTR 0x4
 
 ; ---- section header table column widths ----
 %define WS_IDX      5
@@ -266,6 +268,11 @@ section .rodata
     s_nostack:      db "  [!] no PT_GNU_STACK segment (stack executability unspecified)", 10, 0
     s_wx_pre:       db "  [!] segment ", 0
     s_wx_post:      db " is writable and executable (W^X violation)", 10, 0
+    s_entry_pre:    db "  [!] entry point ", 0
+    s_entry_post:   db " is not inside any executable segment", 10, 0
+    s_wxsect_pre:   db "  [!] section ", 0
+    s_wxsect_post:  db " is writable and executable", 10, 0
+    s_noshdr:       db "  [!] no section header table (section info stripped)", 10, 0
     sec_summary:    db " security warning(s) found", 10, 0
 
     ; ---- program header (segment) type names ----
@@ -331,6 +338,9 @@ section .rodata
     jk_gnustack:    db 34, "gnu_stack", 34, ":", 0
     jk_execstack:   db 34, "executable_stack", 34, ":", 0
     jk_wxseg:       db 34, "wx_segments", 34, ":", 0
+    jk_wxsect:      db 34, "wx_sections", 34, ":", 0
+    jk_entryok:     db 34, "entry_in_exec", 34, ":", 0
+    jk_hasshdr:     db 34, "has_section_headers", 34, ":", 0
     jk_warnings:    db 34, "warnings", 34, ":", 0
     jv_st_absent:   db "absent", 0
     jv_st_noexec:   db "noexec", 0
@@ -567,7 +577,9 @@ section .bss
     issues:         resq 1             ; count of structural problems found
     warnings:       resq 1             ; count of security concerns found
     sec_wx:         resq 1             ; count of W^X (writable+executable) segments
+    sec_wxsect:     resq 1             ; count of writable+executable sections
     sec_stack:      resb 1             ; GNU_STACK: 0=absent 1=non-exec 2=exec
+    sec_entry_ok:   resb 1             ; 1 = entry point lies in an exec segment
     flagbuf:        resb 4             ; "RWX" flag string + NUL
     shflagbuf:      resb 16            ; section flag letters + NUL
     nread:          resq 1             ; bytes actually read
@@ -1611,14 +1623,17 @@ check_security:
     VP sec_title
     mov qword [warnings], 0
     mov qword [sec_wx], 0
+    mov qword [sec_wxsect], 0
     mov byte [sec_stack], 0            ; assume GNU_STACK absent
+    mov byte [sec_entry_ok], 0         ; assume entry not in an exec segment
+    ; --- phase 1: program headers ---
     movzx r14d, word [ehdr + E_PHNUM]
     test r14, r14
-    jz .stack
+    jz .entry_check
     xor r13, r13
 .cs_loop:
     cmp r13, r14
-    jae .stack
+    jae .entry_check
     movzx eax, word [ehdr + E_PHENTSIZE]
     imul rax, r13
     add rax, [ehdr + E_PHOFF]
@@ -1633,7 +1648,7 @@ check_security:
     mov rax, SYS_READ
     syscall
     cmp rax, PHDR_SIZE
-    jl .stack                         ; short read -> stop scanning
+    jl .entry_check                   ; short read -> stop scanning
     ; --- PT_GNU_STACK tracking ---
     mov eax, dword [phdr + P_TYPE]
     cmp eax, PT_GNU_STACK
@@ -1645,20 +1660,89 @@ check_security:
 .cs_wx:
     ; --- W^X violation: a loadable (PT_LOAD) segment with both W and X ---
     cmp dword [phdr + P_TYPE], 1       ; PT_LOAD only; GNU_STACK handled below
-    jne .cs_next
+    jne .cs_entry
     mov al, byte [phdr + P_FLAGS]
     and al, (PF_W | PF_X)
     cmp al, (PF_W | PF_X)
-    jne .cs_next
+    jne .cs_entry
     VP s_wx_pre
     mov rax, r13
     call vdec
     VP s_wx_post
     inc qword [warnings]
     inc qword [sec_wx]
+.cs_entry:
+    ; --- entry-point coverage: PT_LOAD + X whose range contains e_entry ---
+    cmp dword [phdr + P_TYPE], 1
+    jne .cs_next
+    test byte [phdr + P_FLAGS], PF_X
+    jz .cs_next
+    mov rax, [ehdr + E_ENTRY]
+    cmp rax, [phdr + P_VADDR]
+    jb .cs_next
+    mov rcx, [phdr + P_VADDR]
+    add rcx, [phdr + P_MEMSZ]
+    cmp rax, rcx
+    jae .cs_next
+    mov byte [sec_entry_ok], 1
 .cs_next:
     inc r13
     jmp .cs_loop
+.entry_check:
+    ; entry 0 (e.g. a shared object) carries no code address -> skip
+    mov rax, [ehdr + E_ENTRY]
+    test rax, rax
+    jz .sections
+    cmp byte [sec_entry_ok], 1
+    je .sections
+    VP s_entry_pre
+    mov rax, [ehdr + E_ENTRY]
+    call vhex
+    VP s_entry_post
+    inc qword [warnings]
+.sections:
+    ; --- phase 2: section headers ---
+    movzx r14d, word [ehdr + E_SHNUM]
+    test r14, r14
+    jnz .have_sections
+    VP s_noshdr
+    inc qword [warnings]
+    jmp .stack
+.have_sections:
+    call load_shstrtab                 ; for section names (overwrites [shdr])
+    xor r13, r13
+.sec_loop:
+    cmp r13, r14
+    jae .stack
+    movzx eax, word [ehdr + E_SHENTSIZE]
+    imul rax, r13
+    add rax, [ehdr + E_SHOFF]
+    mov rdi, r12
+    mov rsi, rax
+    xor edx, edx
+    mov rax, SYS_LSEEK
+    syscall
+    mov rdi, r12
+    lea rsi, [shdr]
+    mov rdx, SHDR_SIZE
+    mov rax, SYS_READ
+    syscall
+    cmp rax, SHDR_SIZE
+    jl .stack                         ; short read -> stop scanning
+    ; writable + executable section?
+    mov rax, [shdr + SH_FLAGS]
+    and rax, (SHF_WRITE | SHF_EXECINSTR)
+    cmp rax, (SHF_WRITE | SHF_EXECINSTR)
+    jne .sec_next
+    VP s_wxsect_pre
+    call section_name_ptr             ; rsi -> section name
+    call vprint
+    VP s_wxsect_post
+    inc qword [warnings]
+    inc qword [sec_wxsect]
+.sec_next:
+    inc r13
+    jmp .sec_loop
 .stack:
     cmp byte [sec_stack], 2
     je .stack_exec
@@ -2025,7 +2109,8 @@ json_validation:
     ret
 
 ; json_security - "security":{"gnu_stack":"...","executable_stack":bool,
-;                 "wx_segments":N,"warnings":N}
+;                 "wx_segments":N,"wx_sections":N,"entry_in_exec":bool,
+;                 "has_section_headers":bool,"warnings":N}
 ; Runs check_security silently to populate the counters.
 json_security:
     PRINT jk_security
@@ -2060,6 +2145,31 @@ json_security:
     PRINT jk_wxseg
     mov rax, [sec_wx]
     call print_dec
+    PRINT j_comma
+    PRINT jk_wxsect
+    mov rax, [sec_wxsect]
+    call print_dec
+    PRINT j_comma
+    PRINT jk_entryok
+    ; entry_in_exec: true if entry==0 (no code address) or it lies in exec seg
+    cmp qword [ehdr + E_ENTRY], 0
+    je .js_entry_true
+    cmp byte [sec_entry_ok], 1
+    je .js_entry_true
+    PRINT j_false
+    jmp .js_shdr
+.js_entry_true:
+    PRINT j_true
+.js_shdr:
+    PRINT j_comma
+    PRINT jk_hasshdr
+    cmp word [ehdr + E_SHNUM], 0
+    je .js_noshdr
+    PRINT j_true
+    jmp .js_warn
+.js_noshdr:
+    PRINT j_false
+.js_warn:
     PRINT j_comma
     PRINT jk_warnings
     mov rax, [warnings]

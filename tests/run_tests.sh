@@ -175,6 +175,51 @@ open(p, 'wb').write(d)
 PY
     out="$("$BIN" "$wx" 2>&1)"; code=$?
     check "W^X LOAD segment detected"     0 "$code" "W^X violation"  "$out"
+
+    # suspicious: entry point outside any executable segment
+    be="$TMP/badentry.elf"; cp "$BIN" "$be"
+    python3 - "$be" <<'PY'
+import sys, struct
+p = sys.argv[1]; d = bytearray(open(p, 'rb').read())
+struct.pack_into('<Q', d, 24, 0xdeadbeef)    # e_entry -> bogus address
+open(p, 'wb').write(d)
+PY
+    out="$("$BIN" "$be" 2>&1)"; code=$?
+    check "bad entry point detected"       0 "$code" "not inside any executable segment" "$out"
+    out="$("$BIN" --json "$be" 2>&1)"; code=$?
+    check "--json entry_in_exec false"     0 "$code" '"entry_in_exec":false' "$out"
+
+    # suspicious: section header table stripped
+    ns="$TMP/noshdr.elf"; cp "$BIN" "$ns"
+    python3 - "$ns" <<'PY'
+import sys, struct
+p = sys.argv[1]; d = bytearray(open(p, 'rb').read())
+struct.pack_into('<Q', d, 40, 0)             # e_shoff = 0
+struct.pack_into('<H', d, 60, 0)             # e_shnum = 0
+struct.pack_into('<H', d, 62, 0)             # e_shstrndx = 0
+open(p, 'wb').write(d)
+PY
+    out="$("$BIN" "$ns" 2>&1)"; code=$?
+    check "stripped section headers flagged" 0 "$code" "no section header table" "$out"
+
+    # suspicious: writable + executable section
+    ws="$TMP/wxsect.elf"; cp "$BIN" "$ws"
+    python3 - "$ws" <<'PY'
+import sys, struct
+p = sys.argv[1]; d = bytearray(open(p, 'rb').read())
+off = struct.unpack_from('<Q', d, 40)[0]
+es  = struct.unpack_from('<H', d, 58)[0]
+n   = struct.unpack_from('<H', d, 60)[0]
+for i in range(n):
+    b = off + i * es
+    fl = struct.unpack_from('<Q', d, b + 8)[0]
+    if fl & 4:                               # SHF_EXECINSTR -> add SHF_WRITE
+        struct.pack_into('<Q', d, b + 8, fl | 1)
+        break
+open(p, 'wb').write(d)
+PY
+    out="$("$BIN" "$ws" 2>&1)"; code=$?
+    check "W+X section detected"           0 "$code" "is writable and executable" "$out"
 fi
 
 # Executable stack detection (needs gcc)
