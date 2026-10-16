@@ -58,9 +58,22 @@
 %define P_MEMSZ     40
 %define P_ALIGN     48
 %define PT_GNU_STACK 0x6474e551
+%define PT_INTERP    3
+%define PT_GNU_RELRO 0x6474e552
 %define PF_X        1
 %define PF_W        2
 %define PF_R        4
+
+; ---- e_type values and dynamic-section tags (for the hardening report) ----
+%define ET_EXEC      2
+%define ET_DYN       3
+%define DT_RPATH     15
+%define DT_BIND_NOW  24
+%define DT_RUNPATH   29
+%define DT_FLAGS     30
+%define DT_FLAGS_1   0x6ffffffb
+%define DF_BIND_NOW  0x8
+%define DF_1_NOW     0x1
 
 ; ---- program header table column widths ----
 %define W_IDX       5
@@ -289,6 +302,29 @@ section .rodata
     dyn_none:       db "    (none)", 10, 0
     dyn_indent:     db "    ", 0
 
+    ; ---- hardening report (checksec-style) ----
+    hd_title:       db 10, "Hardening:", 10, 0
+    hd_relro_lbl:   db "  RELRO:         ", 0
+    hd_canary_lbl:  db "  Stack canary:  ", 0
+    hd_nx_lbl:      db "  NX:            ", 0
+    hd_pie_lbl:     db "  PIE:           ", 0
+    hd_rpath_lbl:   db "  RPATH:         ", 0
+    hd_runpath_lbl: db "  RUNPATH:       ", 0
+    hd_fortify_lbl: db "  Fortify:       ", 0
+    hd_full:        db "full", 10, 0
+    hd_partial:     db "partial", 10, 0
+    hd_none:        db "none", 10, 0
+    hd_yes:         db "found", 10, 0
+    hd_no:          db "not found", 10, 0
+    hd_enabled:     db "enabled", 10, 0
+    hd_disabled:    db "disabled", 10, 0
+    hd_unknown:     db "unknown (no PT_GNU_STACK)", 10, 0
+    hd_dso:         db "shared object", 10, 0
+    hd_na:          db "n/a", 10, 0
+    hd_notset:      db "not set", 10, 0
+    hd_fortify_fns: db " fortified function(s)", 10, 0
+    name_stackchk:  db "__stack_chk_fail", 0
+
     ; ---- program header (segment) type names ----
     pt_null:        db "NULL", 0
     pt_load:        db "LOAD", 0
@@ -312,6 +348,7 @@ section .rodata
     j_quote:        db 34, 0
     j_true:         db "true", 0
     j_false:        db "false", 0
+    j_null:         db "null", 0
     esc_quote:      db 92, 34, 0            ; backslash + double-quote
     esc_bslash:     db 92, 92, 0            ; two backslashes
     esc_u00:        db 92, "u00", 0         ; prefix for control-char escapes
@@ -363,6 +400,22 @@ section .rodata
     jk_static:      db 34, "static", 34, ":", 0
     jk_needed:      db 34, "needed", 34, ":", 0
     jk_imports:     db 34, "imports", 34, ":", 0
+    jk_hardening:   db 34, "hardening", 34, ":", 0
+    jk_relro:       db 34, "relro", 34, ":", 0
+    jk_canary:      db 34, "stack_canary", 34, ":", 0
+    jk_nx:          db 34, "nx", 34, ":", 0
+    jk_pie:         db 34, "pie", 34, ":", 0
+    jk_rpath:       db 34, "rpath", 34, ":", 0
+    jk_runpath:     db 34, "runpath", 34, ":", 0
+    jk_fortify:     db 34, "fortify", 34, ":", 0
+    jv_full:        db "full", 0
+    jv_partial:     db "partial", 0
+    jv_none:        db "none", 0
+    jv_enabled:     db "enabled", 0
+    jv_disabled:    db "disabled", 0
+    jv_unknown:     db "unknown", 0
+    jv_dso:         db "shared_object", 0
+    jv_na:          db "n/a", 0
 
     ; ---- disassembler literals ----
     dis_title:      db 10, "Disassembly of section ", 0
@@ -603,6 +656,15 @@ section .bss
     dsym_ent:       resq 1             ; .dynsym entry size
     dsym_link:      resd 1             ; .dynsym sh_link (string table index)
     dyn_is_static:  resb 1             ; 1 = no .dynamic section found
+    hd_interp:      resb 1             ; 1 = PT_INTERP present
+    hd_stack:       resb 1             ; 0 absent / 1 noexec / 2 exec (PT_GNU_STACK)
+    hd_relro_seg:   resb 1             ; 1 = PT_GNU_RELRO present
+    hd_bindnow:     resb 1             ; 1 = BIND_NOW (full RELRO)
+    hd_canary:      resb 1             ; 1 = __stack_chk_fail imported
+    hd_flags1:      resq 1             ; DT_FLAGS_1 value
+    hd_rpath_off:   resq 1             ; DT_RPATH dynstr offset, or -1
+    hd_runpath_off: resq 1             ; DT_RUNPATH dynstr offset, or -1
+    hd_fortify:     resq 1             ; count of imported *_chk functions
     filesize:       resq 1             ; total file size (bytes)
     issues:         resq 1             ; count of structural problems found
     warnings:       resq 1             ; count of security concerns found
@@ -755,6 +817,7 @@ _start:
     call validate_structure    ; sanity-check offsets, counts [issues]
     call check_security        ; segment perms + stack exec, counts [warnings]
     call analyze_dynamic       ; needed libraries + imported symbols
+    call check_hardening       ; exploit-mitigation posture (checksec-style)
     jmp .after_output
 .emit_json:
     call print_json            ; emits everything + counts [issues]
@@ -2068,6 +2131,334 @@ analyze_dynamic:
     ret
 
 ; ---------------------------------------------------------------------------
+; check_hardening - report exploit-mitigation posture (checksec-style):
+;   RELRO, stack canary, NX, PIE, RPATH/RUNPATH and Fortify.
+;   Gathers facts into hd_* then prints them.  Uses VP/vprint/vdec so it also
+;   populates the hd_* fields silently for the JSON path.  fd in r12.
+; ---------------------------------------------------------------------------
+check_hardening:
+    VP hd_title
+    call hd_scan_phdrs         ; -> hd_interp, hd_stack, hd_relro_seg
+    call hd_scan_dynamic       ; -> hd_bindnow, hd_flags1, hd_rpath/runpath_off
+    call hd_scan_imports       ; -> hd_canary, hd_fortify (loads .dynstr last)
+    ; --- RELRO ---
+    VP hd_relro_lbl
+    cmp byte [hd_relro_seg], 0
+    je .h_relro_none
+    cmp byte [hd_bindnow], 0
+    jne .h_relro_full
+    VP hd_partial
+    jmp .h_canary
+.h_relro_full:
+    VP hd_full
+    jmp .h_canary
+.h_relro_none:
+    VP hd_none
+.h_canary:
+    ; --- Stack canary ---
+    VP hd_canary_lbl
+    cmp byte [hd_canary], 0
+    jne .h_canary_yes
+    VP hd_no
+    jmp .h_nx
+.h_canary_yes:
+    VP hd_yes
+.h_nx:
+    ; --- NX (non-executable stack) ---
+    VP hd_nx_lbl
+    cmp byte [hd_stack], 2
+    je .h_nx_dis
+    cmp byte [hd_stack], 0
+    je .h_nx_unknown
+    VP hd_enabled
+    jmp .h_pie
+.h_nx_dis:
+    VP hd_disabled
+    jmp .h_pie
+.h_nx_unknown:
+    VP hd_unknown
+.h_pie:
+    ; --- PIE ---
+    VP hd_pie_lbl
+    movzx eax, word [ehdr + E_TYPE]
+    cmp eax, ET_EXEC
+    je .h_pie_no
+    cmp eax, ET_DYN
+    jne .h_pie_na
+    cmp byte [hd_interp], 0
+    je .h_pie_dso
+    VP hd_enabled
+    jmp .h_rpath
+.h_pie_no:
+    VP hd_disabled
+    jmp .h_rpath
+.h_pie_dso:
+    VP hd_dso
+    jmp .h_rpath
+.h_pie_na:
+    VP hd_na
+.h_rpath:
+    ; --- RPATH ---
+    VP hd_rpath_lbl
+    cmp qword [hd_rpath_off], -1
+    je .h_rpath_none
+    mov rax, [hd_rpath_off]
+    call dynstr_name_ptr
+    call vprint
+    VP nl
+    jmp .h_runpath
+.h_rpath_none:
+    VP hd_notset
+.h_runpath:
+    ; --- RUNPATH ---
+    VP hd_runpath_lbl
+    cmp qword [hd_runpath_off], -1
+    je .h_runpath_none
+    mov rax, [hd_runpath_off]
+    call dynstr_name_ptr
+    call vprint
+    VP nl
+    jmp .h_fortify
+.h_runpath_none:
+    VP hd_notset
+.h_fortify:
+    ; --- Fortify ---
+    VP hd_fortify_lbl
+    cmp qword [hd_fortify], 0
+    je .h_fortify_no
+    mov rax, [hd_fortify]
+    call vdec
+    VP hd_fortify_fns
+    ret
+.h_fortify_no:
+    VP hd_no
+    ret
+
+; hd_scan_phdrs - set hd_interp / hd_stack / hd_relro_seg from program headers
+hd_scan_phdrs:
+    mov byte [hd_interp], 0
+    mov byte [hd_stack], 0
+    mov byte [hd_relro_seg], 0
+    movzx r14d, word [ehdr + E_PHNUM]
+    test r14, r14
+    jz .sp_done
+    xor r13, r13
+.sp_loop:
+    cmp r13, r14
+    jae .sp_done
+    movzx eax, word [ehdr + E_PHENTSIZE]
+    imul rax, r13
+    add rax, [ehdr + E_PHOFF]
+    mov rdi, r12
+    mov rsi, rax
+    xor edx, edx
+    mov rax, SYS_LSEEK
+    syscall
+    mov rdi, r12
+    lea rsi, [phdr]
+    mov rdx, PHDR_SIZE
+    mov rax, SYS_READ
+    syscall
+    cmp rax, PHDR_SIZE
+    jl .sp_done
+    mov eax, dword [phdr + P_TYPE]
+    cmp eax, PT_INTERP
+    jne .sp_c1
+    mov byte [hd_interp], 1
+    jmp .sp_next
+.sp_c1:
+    cmp eax, PT_GNU_STACK
+    jne .sp_c2
+    mov byte [hd_stack], 1
+    test byte [phdr + P_FLAGS], PF_X
+    jz .sp_next
+    mov byte [hd_stack], 2
+    jmp .sp_next
+.sp_c2:
+    cmp eax, PT_GNU_RELRO
+    jne .sp_next
+    mov byte [hd_relro_seg], 1
+.sp_next:
+    inc r13
+    jmp .sp_loop
+.sp_done:
+    ret
+
+; hd_scan_dynamic - read DT_RPATH/RUNPATH/BIND_NOW/FLAGS(_1) from .dynamic
+hd_scan_dynamic:
+    mov byte [hd_bindnow], 0
+    mov qword [hd_flags1], 0
+    mov qword [hd_rpath_off], -1
+    mov qword [hd_runpath_off], -1
+    mov eax, 6                 ; SHT_DYNAMIC
+    call find_section
+    cmp rax, -1
+    je .sd_done
+    mov rax, [shdr + SH_OFFSET]
+    mov [dyn_off], rax
+    mov rax, [shdr + SH_SIZE]
+    mov [dyn_size], rax
+    mov eax, dword [shdr + SH_LINK]
+    mov [dyn_link], eax
+    mov eax, dword [dyn_link]
+    call load_dynstr
+    mov r14, [dyn_size]
+    shr r14, 4
+    xor r13, r13
+.sd_loop:
+    cmp r13, r14
+    jae .sd_done
+    mov rax, r13
+    shl rax, 4
+    add rax, [dyn_off]
+    mov rdi, r12
+    mov rsi, rax
+    xor edx, edx
+    mov rax, SYS_LSEEK
+    syscall
+    mov rdi, r12
+    lea rsi, [dynent]
+    mov rdx, 16
+    mov rax, SYS_READ
+    syscall
+    cmp rax, 16
+    jl .sd_done
+    mov rax, [dynent]          ; d_tag
+    test rax, rax
+    jz .sd_done                ; DT_NULL
+    cmp rax, DT_RPATH
+    jne .sd_t1
+    mov rax, [dynent + 8]
+    mov [hd_rpath_off], rax
+    jmp .sd_next
+.sd_t1:
+    cmp rax, DT_RUNPATH
+    jne .sd_t2
+    mov rax, [dynent + 8]
+    mov [hd_runpath_off], rax
+    jmp .sd_next
+.sd_t2:
+    cmp rax, DT_BIND_NOW
+    jne .sd_t3
+    mov byte [hd_bindnow], 1
+    jmp .sd_next
+.sd_t3:
+    cmp rax, DT_FLAGS
+    jne .sd_t4
+    mov rax, [dynent + 8]
+    test rax, DF_BIND_NOW
+    jz .sd_next
+    mov byte [hd_bindnow], 1
+    jmp .sd_next
+.sd_t4:
+    cmp rax, DT_FLAGS_1
+    jne .sd_next
+    mov rax, [dynent + 8]
+    mov [hd_flags1], rax
+    test rax, DF_1_NOW
+    jz .sd_next
+    mov byte [hd_bindnow], 1
+.sd_next:
+    inc r13
+    jmp .sd_loop
+.sd_done:
+    ret
+
+; hd_scan_imports - set hd_canary / hd_fortify from the .dynsym imports
+hd_scan_imports:
+    mov byte [hd_canary], 0
+    mov qword [hd_fortify], 0
+    mov eax, 11                ; SHT_DYNSYM
+    call find_section
+    cmp rax, -1
+    je .si_done
+    mov rax, [shdr + SH_OFFSET]
+    mov [dsym_off], rax
+    mov rax, [shdr + SH_SIZE]
+    mov [dsym_size], rax
+    mov rax, [shdr + SH_ENTSIZE]
+    mov [dsym_ent], rax
+    mov eax, dword [shdr + SH_LINK]
+    mov [dsym_link], eax
+    mov eax, dword [dsym_link]
+    call load_dynstr
+    mov rcx, [dsym_ent]
+    test rcx, rcx
+    jz .si_done
+    mov rax, [dsym_size]
+    xor rdx, rdx
+    div rcx
+    mov r14, rax
+    xor r13, r13
+.si_loop:
+    cmp r13, r14
+    jae .si_done
+    mov rax, r13
+    mul qword [dsym_ent]
+    add rax, [dsym_off]
+    mov rdi, r12
+    mov rsi, rax
+    xor edx, edx
+    mov rax, SYS_LSEEK
+    syscall
+    mov rdi, r12
+    lea rsi, [syment]
+    mov rdx, 24
+    mov rax, SYS_READ
+    syscall
+    cmp rax, 24
+    jl .si_done
+    movzx eax, word [syment + 6]  ; st_shndx
+    test eax, eax
+    jnz .si_next               ; defined here -> not an import
+    mov eax, dword [syment]       ; st_name
+    test eax, eax
+    jz .si_next
+    call dynstr_name_ptr          ; rsi -> name
+    lea rdi, [name_stackchk]
+    call streq                    ; rsi/rdi preserved
+    test al, al
+    jz .si_chk
+    mov byte [hd_canary], 1
+.si_chk:
+    call ends_chk                 ; al=1 if name ends with "_chk"
+    test al, al
+    jz .si_next
+    inc qword [hd_fortify]
+.si_next:
+    inc r13
+    jmp .si_loop
+.si_done:
+    ret
+
+; ends_chk - test whether the NUL-terminated string in rsi ends with "_chk".
+;   out: al = 1 if it does, else 0.  rsi preserved.
+ends_chk:
+    xor rcx, rcx
+.ec_len:
+    cmp byte [rsi + rcx], 0
+    je .ec_have
+    inc rcx
+    jmp .ec_len
+.ec_have:
+    cmp rcx, 4
+    jb .ec_no
+    lea rdx, [rsi + rcx - 4]
+    cmp byte [rdx], '_'
+    jne .ec_no
+    cmp byte [rdx + 1], 'c'
+    jne .ec_no
+    cmp byte [rdx + 2], 'h'
+    jne .ec_no
+    cmp byte [rdx + 3], 'k'
+    jne .ec_no
+    mov al, 1
+    ret
+.ec_no:
+    xor al, al
+    ret
+
+; ---------------------------------------------------------------------------
 ; streq - compare two NUL-terminated strings.
 ;   in:  rsi, rdi = string pointers
 ;   out: al = 1 if equal, else 0.  rsi/rdi preserved.
@@ -2137,6 +2528,8 @@ print_json:
     call json_security
     PRINT j_comma
     call json_dynamic
+    PRINT j_comma
+    call json_hardening
     PRINT j_rbrace
     PRINT nl
     ret
@@ -2629,6 +3022,110 @@ json_imports_arr:
     inc r13
     jmp .ji_loop
 .ji_done:
+    ret
+
+; json_hardening - "hardening":{"relro":..,"stack_canary":bool,"nx":..,
+;                 "pie":..,"rpath":str|null,"runpath":str|null,"fortify":N}
+; Runs check_hardening silently to populate the hd_* fields.
+json_hardening:
+    PRINT jk_hardening
+    PRINT j_lbrace
+    mov byte [silent], 1
+    call check_hardening
+    mov byte [silent], 0
+    ; --- relro ---
+    PRINT jk_relro
+    cmp byte [hd_relro_seg], 0
+    je .jh_relro_none
+    cmp byte [hd_bindnow], 0
+    jne .jh_relro_full
+    lea rsi, [jv_partial]
+    jmp .jh_relro_emit
+.jh_relro_full:
+    lea rsi, [jv_full]
+    jmp .jh_relro_emit
+.jh_relro_none:
+    lea rsi, [jv_none]
+.jh_relro_emit:
+    call jname
+    PRINT j_comma
+    ; --- stack_canary ---
+    PRINT jk_canary
+    cmp byte [hd_canary], 0
+    jne .jh_can_true
+    PRINT j_false
+    jmp .jh_nx
+.jh_can_true:
+    PRINT j_true
+.jh_nx:
+    PRINT j_comma
+    ; --- nx ---
+    PRINT jk_nx
+    cmp byte [hd_stack], 2
+    je .jh_nx_dis
+    cmp byte [hd_stack], 0
+    je .jh_nx_unk
+    lea rsi, [jv_enabled]
+    jmp .jh_nx_emit
+.jh_nx_dis:
+    lea rsi, [jv_disabled]
+    jmp .jh_nx_emit
+.jh_nx_unk:
+    lea rsi, [jv_unknown]
+.jh_nx_emit:
+    call jname
+    PRINT j_comma
+    ; --- pie ---
+    PRINT jk_pie
+    movzx eax, word [ehdr + E_TYPE]
+    cmp eax, ET_EXEC
+    je .jh_pie_dis
+    cmp eax, ET_DYN
+    jne .jh_pie_na
+    cmp byte [hd_interp], 0
+    je .jh_pie_dso
+    lea rsi, [jv_enabled]
+    jmp .jh_pie_emit
+.jh_pie_dis:
+    lea rsi, [jv_disabled]
+    jmp .jh_pie_emit
+.jh_pie_dso:
+    lea rsi, [jv_dso]
+    jmp .jh_pie_emit
+.jh_pie_na:
+    lea rsi, [jv_na]
+.jh_pie_emit:
+    call jname
+    PRINT j_comma
+    ; --- rpath ---
+    PRINT jk_rpath
+    cmp qword [hd_rpath_off], -1
+    je .jh_rpath_null
+    mov rax, [hd_rpath_off]
+    call dynstr_name_ptr
+    call jstr
+    jmp .jh_runpath
+.jh_rpath_null:
+    PRINT j_null
+.jh_runpath:
+    PRINT j_comma
+    ; --- runpath ---
+    PRINT jk_runpath
+    cmp qword [hd_runpath_off], -1
+    je .jh_runpath_null
+    mov rax, [hd_runpath_off]
+    call dynstr_name_ptr
+    call jstr
+    jmp .jh_fortify
+.jh_runpath_null:
+    PRINT j_null
+.jh_fortify:
+    PRINT j_comma
+    ; --- fortify ---
+    PRINT jk_fortify
+    mov rax, [hd_fortify]
+    call print_dec
+    PRINT j_rbrace
     ret
 
 ; ---------------------------------------------------------------------------

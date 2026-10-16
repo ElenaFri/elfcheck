@@ -1,8 +1,6 @@
 # elfcheck
 
-A lightweight ELF64 binary inspector for Linux x86-64, written in NASM assembly. Parses executable headers, segments and sections, and detects structural inconsistencies in binary files.
-
-> Work in Progress
+A lightweight ELF64 binary inspector for Linux x86-64, written in NASM assembly. Parses executable headers, segments and sections, disassembles machine code, resolves dynamic dependencies, and reports structural and security (hardening) issues — with optional JSON output. No libc; direct syscalls only.
 
 ## Features
 
@@ -22,7 +20,7 @@ A lightweight ELF64 binary inspector for Linux x86-64, written in NASM assembly.
 - [x] Detect potentially suspicious ELF properties
 - [x] Check segment permissions and executable stack settings
 - [x] Identify imported functions and dynamic dependencies
-- [ ] Generate a security-oriented analysis report
+- [x] Generate a security-oriented analysis report
 
 ## Requirements
 
@@ -87,6 +85,12 @@ A `Dynamic:` section then reports dynamic linking: the shared libraries the file
 depends on (`DT_NEEDED`) and the symbols it imports (undefined `.dynsym`
 entries), or a note when the binary is statically linked. The same data appears
 under `"dynamic"` in `--json` output.
+
+Finally, a `Hardening:` section summarises the binary's exploit-mitigation
+posture, checksec-style: `RELRO` (none/partial/full), stack canary, `NX`
+(non-executable stack), `PIE`, `RPATH`/`RUNPATH`, and the number of fortified
+(`_chk`) functions. It is mirrored under `"hardening"` in `--json` output and,
+like `Security:`, is advisory and does not change the exit code.
 
 Exit codes: `0` valid with no structural issues, `1` usage/read error or not an
 ELF file, `2` valid ELF header but structural inconsistencies were found.

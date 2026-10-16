@@ -265,6 +265,44 @@ if [[ -r /bin/ls ]]; then
     fi
 fi
 
+# 11. Hardening report (checksec-style mitigation posture)
+out="$("$BIN" "$BIN" 2>&1)"; code=$?
+check "hardening section present"          0 "$code" "Hardening:"   "$out"
+check "hardening reports RELRO"           0 "$code" "RELRO:"       "$out"
+check "hardening reports NX"              0 "$code" "NX:"          "$out"
+check "hardening reports PIE"             0 "$code" "PIE:"         "$out"
+
+out="$("$BIN" --json "$BIN" 2>&1)"; code=$?
+check "--json has hardening object"       0 "$code" '"hardening":{' "$out"
+check "--json has relro field"            0 "$code" '"relro":'      "$out"
+check "--json has fortify field"          0 "$code" '"fortify":'    "$out"
+
+# A typical dynamically-linked system ELF should be fully hardened.
+if [[ -r /bin/ls ]]; then
+    out="$("$BIN" /bin/ls 2>&1)"; code=$?
+    check "hardening detects full RELRO"   0 "$code" "RELRO:         full"    "$out"
+    check "hardening detects PIE"          0 "$code" "PIE:           enabled" "$out"
+    check "hardening detects canary"       0 "$code" "Stack canary:  found"   "$out"
+    check "hardening detects fortify"      0 "$code" "fortified function"     "$out"
+fi
+
+# RPATH / RUNPATH and no-PIE detection (needs gcc)
+if command -v gcc >/dev/null 2>&1; then
+    printf 'int main(void){return 0;}\n' > "$TMP/h.c"
+    if gcc -no-pie -o "$TMP/nopie.elf" "$TMP/h.c" 2>/dev/null; then
+        out="$("$BIN" "$TMP/nopie.elf" 2>&1)"; code=$?
+        check "hardening detects no-PIE"   0 "$code" "PIE:           disabled" "$out"
+    fi
+    if gcc -o "$TMP/rpath.elf" "$TMP/h.c" -Wl,-rpath,/opt/x -Wl,--disable-new-dtags 2>/dev/null; then
+        out="$("$BIN" "$TMP/rpath.elf" 2>&1)"; code=$?
+        check "hardening detects RPATH"    0 "$code" "RPATH:         /opt/x"  "$out"
+    fi
+    if gcc -o "$TMP/runpath.elf" "$TMP/h.c" -Wl,-rpath,/opt/y -Wl,--enable-new-dtags 2>/dev/null; then
+        out="$("$BIN" "$TMP/runpath.elf" 2>&1)"; code=$?
+        check "hardening detects RUNPATH"  0 "$code" "RUNPATH:       /opt/y" "$out"
+    fi
+fi
+
 echo
 echo "Results: $pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
