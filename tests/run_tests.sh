@@ -131,6 +131,22 @@ if command -v python3 >/dev/null 2>&1; then
     check "--json is well-formed JSON" 0 "$pcode" "" ""
 fi
 
+# 8. Disassembler mode
+out="$("$BIN" --disasm "$BIN" 2>&1)"; code=$?
+check "--disasm exits 0 for valid ELF"   0 "$code" "Disassembly of section .text:" "$out"
+check "--disasm decodes syscall"         0 "$code" "syscall" "$out"
+check "--disasm decodes call"            0 "$code" "call"    "$out"
+check "--disasm decodes mov"             0 "$code" "mov"     "$out"
+check "--disasm shows instruction bytes" 0 "$code" "0f 05"   "$out"
+
+# -d is an alias for --disasm
+out="$("$BIN" -d "$BIN" 2>&1)"; code=$?
+check "-d alias works"                    0 "$code" "Disassembly of section .text:" "$out"
+
+# flag accepted after the path too
+out="$("$BIN" "$BIN" -d 2>&1)"; code=$?
+check "-d accepted after path"            0 "$code" "Disassembly of section .text:" "$out"
+
 echo
 echo "Results: $pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

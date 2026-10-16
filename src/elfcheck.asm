@@ -89,6 +89,25 @@
 ; max bytes of the section-name string table we buffer
 %define STRTAB_CAP  32768
 
+; max bytes of an executable section we disassemble
+%define TEXT_CAP    262144
+
+; operand rendering styles for the disassembler
+%define ST_NONE     0
+%define ST_RM_REG   1          ; r/m, reg
+%define ST_REG_RM   2          ; reg, r/m
+%define ST_RM_IMM   3          ; r/m, imm
+%define ST_RM       4          ; r/m
+%define ST_REG_IMM  5          ; reg-in-opcode, imm
+%define ST_OREG     6          ; reg-in-opcode
+%define ST_ACC_IMM  7          ; al/eax/rax, imm
+%define ST_REL      8          ; relative branch target
+%define ST_IMM      9          ; imm only
+%define ST_RM_1     10         ; r/m, 1          (shift by one)
+%define ST_RM_CL    11         ; r/m, cl         (shift by cl)
+%define ST_REG_RM_B 12         ; reg, r/m (movzx/movsx: dest wide, src byte/word)
+%define ST_REG_RM_IMM 13       ; reg, r/m, imm (imul)
+
 default rel
 
 ; Print a NUL-terminated string at %1 to stdout.
@@ -296,6 +315,227 @@ section .rodata
     jk_issues:      db 34, "issues", 34, ":", 0
     jk_valid:       db 34, "valid", 34, ":", 0
 
+    ; ---- disassembler literals ----
+    dis_title:      db 10, "Disassembly of section ", 0
+    dis_colon_nl:   db ":", 10, 0
+    dis_nosect:     db "elfcheck: no executable .text section to disassemble", 10
+    dis_nosect_len: equ $ - dis_nosect
+    dis_trunc_note: db "  ... (section larger than buffer; output truncated)", 10, 0
+    dis_colon:      db ":", 0
+    dis_space:      db " ", 0
+    dis_comma:      db ", ", 0
+    dis_0x:         db "0x", 0
+    dis_lbr:        db "[", 0
+    dis_rbr:        db "]", 0
+    dis_plus:       db "+", 0
+    dis_minus:      db "-", 0
+    dis_star:       db "*", 0
+    dis_rip:        db "rip", 0
+    dis_byte_db:    db ".byte ", 0
+    dis_pad:        db "                                        ", 0 ; 40 spaces
+    dis_one:        db "1", 0
+    dis_cl:         db "cl", 0
+    name_text:      db ".text", 0
+
+    ; size keywords indexed by log2(size): 0->byte 1->word 2->dword 3->qword
+    sz_byte:        db "byte ", 0
+    sz_word:        db "word ", 0
+    sz_dword:       db "dword ", 0
+    sz_qword:       db "qword ", 0
+    sz_tbl:         dq sz_byte, sz_word, sz_dword, sz_qword
+
+    ; general-purpose register names
+    r64_0:  db "rax",0
+    r64_1:  db "rcx",0
+    r64_2:  db "rdx",0
+    r64_3:  db "rbx",0
+    r64_4:  db "rsp",0
+    r64_5:  db "rbp",0
+    r64_6:  db "rsi",0
+    r64_7:  db "rdi",0
+    r64_8:  db "r8",0
+    r64_9:  db "r9",0
+    r64_10: db "r10",0
+    r64_11: db "r11",0
+    r64_12: db "r12",0
+    r64_13: db "r13",0
+    r64_14: db "r14",0
+    r64_15: db "r15",0
+    regs64: dq r64_0,r64_1,r64_2,r64_3,r64_4,r64_5,r64_6,r64_7
+            dq r64_8,r64_9,r64_10,r64_11,r64_12,r64_13,r64_14,r64_15
+
+    r32_0:  db "eax",0
+    r32_1:  db "ecx",0
+    r32_2:  db "edx",0
+    r32_3:  db "ebx",0
+    r32_4:  db "esp",0
+    r32_5:  db "ebp",0
+    r32_6:  db "esi",0
+    r32_7:  db "edi",0
+    r32_8:  db "r8d",0
+    r32_9:  db "r9d",0
+    r32_10: db "r10d",0
+    r32_11: db "r11d",0
+    r32_12: db "r12d",0
+    r32_13: db "r13d",0
+    r32_14: db "r14d",0
+    r32_15: db "r15d",0
+    regs32: dq r32_0,r32_1,r32_2,r32_3,r32_4,r32_5,r32_6,r32_7
+            dq r32_8,r32_9,r32_10,r32_11,r32_12,r32_13,r32_14,r32_15
+
+    r16_0:  db "ax",0
+    r16_1:  db "cx",0
+    r16_2:  db "dx",0
+    r16_3:  db "bx",0
+    r16_4:  db "sp",0
+    r16_5:  db "bp",0
+    r16_6:  db "si",0
+    r16_7:  db "di",0
+    r16_8:  db "r8w",0
+    r16_9:  db "r9w",0
+    r16_10: db "r10w",0
+    r16_11: db "r11w",0
+    r16_12: db "r12w",0
+    r16_13: db "r13w",0
+    r16_14: db "r14w",0
+    r16_15: db "r15w",0
+    regs16: dq r16_0,r16_1,r16_2,r16_3,r16_4,r16_5,r16_6,r16_7
+            dq r16_8,r16_9,r16_10,r16_11,r16_12,r16_13,r16_14,r16_15
+
+    r8_0:   db "al",0
+    r8_1:   db "cl",0
+    r8_2:   db "dl",0
+    r8_3:   db "bl",0
+    r8_4:   db "spl",0
+    r8_5:   db "bpl",0
+    r8_6:   db "sil",0
+    r8_7:   db "dil",0
+    r8_8:   db "r8b",0
+    r8_9:   db "r9b",0
+    r8_10:  db "r10b",0
+    r8_11:  db "r11b",0
+    r8_12:  db "r12b",0
+    r8_13:  db "r13b",0
+    r8_14:  db "r14b",0
+    r8_15:  db "r15b",0
+    regs8:  dq r8_0,r8_1,r8_2,r8_3,r8_4,r8_5,r8_6,r8_7
+            dq r8_8,r8_9,r8_10,r8_11,r8_12,r8_13,r8_14,r8_15
+    ; legacy high-byte names when no REX prefix is present (indices 4-7)
+    r8h_4:  db "ah",0
+    r8h_5:  db "ch",0
+    r8h_6:  db "dh",0
+    r8h_7:  db "bh",0
+    regs8h: dq r8_0,r8_1,r8_2,r8_3,r8h_4,r8h_5,r8h_6,r8h_7
+
+    ; mnemonics
+    mn_add:  db "add",0
+    mn_or:   db "or",0
+    mn_adc:  db "adc",0
+    mn_sbb:  db "sbb",0
+    mn_and:  db "and",0
+    mn_sub:  db "sub",0
+    mn_xor:  db "xor",0
+    mn_cmp:  db "cmp",0
+    mn_push: db "push",0
+    mn_pop:  db "pop",0
+    mn_mov:  db "mov",0
+    mn_lea:  db "lea",0
+    mn_test: db "test",0
+    mn_xchg: db "xchg",0
+    mn_nop:  db "nop",0
+    mn_ret:  db "ret",0
+    mn_leave:db "leave",0
+    mn_call: db "call",0
+    mn_jmp:  db "jmp",0
+    mn_inc:  db "inc",0
+    mn_dec:  db "dec",0
+    mn_not:  db "not",0
+    mn_neg:  db "neg",0
+    mn_mul:  db "mul",0
+    mn_imul: db "imul",0
+    mn_div:  db "div",0
+    mn_idiv: db "idiv",0
+    mn_int3: db "int3",0
+    mn_syscall: db "syscall",0
+    mn_cdqe: db "cdqe",0
+    mn_cqo:  db "cqo",0
+    mn_cwde: db "cwde",0
+    mn_cdq:  db "cdq",0
+    mn_movzx:db "movzx",0
+    mn_movsx:db "movsx",0
+    mn_movsxd:db "movsxd",0
+    mn_rol:  db "rol",0
+    mn_ror:  db "ror",0
+    mn_rcl:  db "rcl",0
+    mn_rcr:  db "rcr",0
+    mn_shl:  db "shl",0
+    mn_shr:  db "shr",0
+    mn_sar:  db "sar",0
+    mn_cpuid:db "cpuid",0
+    mn_endbr64: db "endbr64",0
+    mn_hlt:  db "hlt",0
+    ; string-operation base names (indexed 0-4), size suffix + rep prefix
+    ; are appended at decode time into strmnem
+    str_movs: db "movs",0
+    str_cmps: db "cmps",0
+    str_stos: db "stos",0
+    str_lods: db "lods",0
+    str_scas: db "scas",0
+    str_tbl:  dq str_movs,str_movs,str_cmps,str_cmps,0,0,str_stos,str_stos,str_lods,str_lods,str_scas,str_scas
+    pfx_rep:  db "rep ",0
+    pfx_repz: db "repz ",0
+    pfx_repnz:db "repnz ",0
+    mn_movsxd_pad: db 0
+
+    ; arithmetic group (0x00..0x3F and group1) indexed by reg/row 0-7
+    grp_arith: dq mn_add,mn_or,mn_adc,mn_sbb,mn_and,mn_sub,mn_xor,mn_cmp
+    ; shift group (0xC0/C1/D0-D3) indexed by reg 0-7
+    grp_shift: dq mn_rol,mn_ror,mn_rcl,mn_rcr,mn_shl,mn_shr,mn_shl,mn_sar
+    ; group3 (0xF6/F7) indexed by reg 0-7
+    grp_f7:    dq mn_test,mn_test,mn_not,mn_neg,mn_mul,mn_imul,mn_div,mn_idiv
+
+    ; conditional-jump mnemonics indexed by tttn (0-15)
+    jcc_0:  db "jo",0
+    jcc_1:  db "jno",0
+    jcc_2:  db "jb",0
+    jcc_3:  db "jae",0
+    jcc_4:  db "je",0
+    jcc_5:  db "jne",0
+    jcc_6:  db "jbe",0
+    jcc_7:  db "ja",0
+    jcc_8:  db "js",0
+    jcc_9:  db "jns",0
+    jcc_10: db "jp",0
+    jcc_11: db "jnp",0
+    jcc_12: db "jl",0
+    jcc_13: db "jge",0
+    jcc_14: db "jle",0
+    jcc_15: db "jg",0
+    jcc_tbl: dq jcc_0,jcc_1,jcc_2,jcc_3,jcc_4,jcc_5,jcc_6,jcc_7
+             dq jcc_8,jcc_9,jcc_10,jcc_11,jcc_12,jcc_13,jcc_14,jcc_15
+
+    set_0:  db "seto",0
+    set_1:  db "setno",0
+    set_2:  db "setb",0
+    set_3:  db "setae",0
+    set_4:  db "sete",0
+    set_5:  db "setne",0
+    set_6:  db "setbe",0
+    set_7:  db "seta",0
+    set_8:  db "sets",0
+    set_9:  db "setns",0
+    set_10: db "setp",0
+    set_11: db "setnp",0
+    set_12: db "setl",0
+    set_13: db "setge",0
+    set_14: db "setle",0
+    set_15: db "setg",0
+    set_tbl: dq set_0,set_1,set_2,set_3,set_4,set_5,set_6,set_7
+             dq set_8,set_9,set_10,set_11,set_12,set_13,set_14,set_15
+
+    opt_disasm:     db "--disasm", 0
+    opt_disasm_s:   db "-d", 0
+
 section .bss
     ehdr:           resb EHDR_SIZE     ; full ELF header
     phdr:           resb 64            ; one program header entry (56 used)
@@ -309,8 +549,64 @@ section .bss
     nread:          resq 1             ; bytes actually read
     numbuf:         resb 32            ; scratch for number formatting
     json_mode:      resb 1             ; 1 = emit JSON instead of text
+    disasm_mode:    resb 1             ; 1 = disassemble .text instead of report
     silent:         resb 1             ; 1 = validate_structure suppresses output
     jbuf:           resb 8             ; scratch for JSON byte escaping
+
+    ; ---- disassembler state ----
+    textbuf:        resb TEXT_CAP      ; raw bytes of the section being decoded
+    text_len:       resq 1             ; bytes actually loaded into textbuf
+    text_vaddr:     resq 1             ; virtual address of textbuf[0]
+    text_trunc:     resq 1             ; 1 if the section was larger than TEXT_CAP
+    d_cur:          resq 1             ; decode cursor (into textbuf)
+    d_start:        resq 1             ; start of current instruction
+    d_end:          resq 1             ; textbuf + text_len
+    d_vaddr:        resq 1             ; vaddr of current instruction
+
+    ; per-instruction state, wiped as a block before each decode
+    dstate:
+    d_rex:          resb 1             ; REX byte (0 if absent)
+    d_hasrex:       resb 1
+    d_opsize:       resb 1             ; 0x66 operand-size prefix seen
+    d_addrsz:       resb 1             ; 0x67 address-size prefix seen
+    d_rep:          resb 1             ; 0xF3
+    d_repne:        resb 1             ; 0xF2
+    d_lock:         resb 1             ; 0xF0
+    d_seg:          resb 1             ; segment override prefix (0 none)
+    d_modrm:        resb 1
+    d_mod:          resb 1
+    d_reg:          resb 1             ; reg field incl. REX.R (0-15)
+    d_rm:           resb 1             ; rm field incl. REX.B (0-15)
+    d_mem:          resb 1             ; 1 if ModR/M encodes memory
+    d_scale:        resb 1             ; scale exponent (0-3)
+    d_index:        resb 1             ; index reg incl. REX.X (0-15)
+    d_base:         resb 1             ; base reg incl. REX.B (0-15)
+    d_no_base:      resb 1
+    d_no_index:     resb 1
+    d_riprel:       resb 1
+    d_sibv:         resb 1             ; raw SIB byte
+    d_disp_size:    resb 1             ; 0,1,4
+    d_imm_size:     resb 1             ; 0,1,2,4,8
+    d_is_rel:       resb 1             ; immediate is a rel branch target
+    d_imm_signed:   resb 1             ; immediate should be sign-extended
+    d_byte:         resb 1             ; 1 = byte-sized operation
+    d_defsize8:     resb 1             ; default operand size is 64-bit (push/pop)
+    d_nosize:       resb 1             ; suppress memory size keyword (lea)
+    d_op:           resb 1             ; primary opcode byte
+    d_style:        resb 1             ; operand rendering style (0xff = unknown)
+    d_srcsz:        resb 1             ; source size for movzx/movsx
+    d_trunc:        resb 1             ; ran off the end mid-instruction
+    first_printed:  resb 1             ; helper for memory-operand rendering
+    d_disp:         resq 1             ; sign-extended displacement
+    d_imm:          resq 1             ; immediate / relative value
+    d_mnem:         resq 1             ; pointer to mnemonic string
+    dstate_end:
+    bytebuf:        resb 4             ; scratch for byte/number printing
+    strmnem:        resb 24            ; composed mnemonic for string ops (rep + base + suffix)
+    sel_off:        resq 1             ; file offset of the section to disassemble
+    sel_size:       resq 1             ; its size in bytes
+    sel_addr:       resq 1             ; its virtual address
+    sel_name:       resq 1             ; pointer to its name
 
 section .text
     global _start
@@ -321,6 +617,7 @@ _start:
     lea r9, [rsp + 8]         ; &argv[0]
     xor r10, r10              ; path pointer (NULL until found)
     mov byte [json_mode], 0
+    mov byte [disasm_mode], 0
     mov rcx, 1               ; i = 1 (skip argv[0])
 .arg_loop:
     cmp rcx, r8
@@ -330,12 +627,26 @@ _start:
     call streq               ; al = 1 if argv[i] == "--json"
     test al, al
     jnz .arg_json
+    mov rsi, [r9 + rcx*8]
+    lea rdi, [opt_disasm]
+    call streq
+    test al, al
+    jnz .arg_disasm
+    mov rsi, [r9 + rcx*8]
+    lea rdi, [opt_disasm_s]
+    call streq
+    test al, al
+    jnz .arg_disasm
+    mov rsi, [r9 + rcx*8]
     test r10, r10            ; otherwise it's the path (only one allowed)
     jnz .usage
     mov r10, rsi
     jmp .arg_next
 .arg_json:
     mov byte [json_mode], 1
+    jmp .arg_next
+.arg_disasm:
+    mov byte [disasm_mode], 1
 .arg_next:
     inc rcx
     jmp .arg_loop
@@ -368,6 +679,8 @@ _start:
     cmp qword [nread], EHDR_SIZE
     jl .truncated
 
+    cmp byte [disasm_mode], 0
+    jne .emit_disasm
     cmp byte [json_mode], 0
     jne .emit_json
     call print_header
@@ -377,6 +690,9 @@ _start:
     jmp .after_output
 .emit_json:
     call print_json            ; emits everything + counts [issues]
+    jmp .after_output
+.emit_disasm:
+    call disassemble           ; disassemble .text; leaves [issues] at 0
 .after_output:
     mov rdi, r12            ; close fd
     mov rax, SYS_CLOSE
@@ -1691,6 +2007,1652 @@ nibble_hex:
     ret
 .nh_digit:
     add al, '0'
+    ret
+
+; ===========================================================================
+; Disassembler (x86-64, common integer subset).  Unknown bytes fall back to
+; a single ".byte 0x.." so decoding always makes forward progress.
+; ===========================================================================
+
+; disassemble - locate .text (PROGBITS + EXECINSTR), load it, decode & print.
+disassemble:
+    mov qword [issues], 0
+    mov qword [sel_off], -1
+    mov qword [text_trunc], 0
+    movzx r14d, word [ehdr + E_SHNUM]
+    test r14, r14
+    jz .none
+    call load_shstrtab
+    xor r13, r13
+.find_loop:
+    cmp r13, r14
+    jae .find_done
+    movzx eax, word [ehdr + E_SHENTSIZE]
+    imul rax, r13
+    add rax, [ehdr + E_SHOFF]
+    mov rdi, r12
+    mov rsi, rax
+    xor edx, edx
+    mov rax, SYS_LSEEK
+    syscall
+    mov rdi, r12
+    lea rsi, [shdr]
+    mov rdx, SHDR_SIZE
+    mov rax, SYS_READ
+    syscall
+    cmp rax, SHDR_SIZE
+    jl .find_done
+    mov eax, dword [shdr + SH_TYPE]     ; PROGBITS?
+    cmp eax, 1
+    jne .next
+    test byte [shdr + SH_FLAGS], 0x4    ; SHF_EXECINSTR?
+    jz .next
+    call section_name_ptr               ; rsi -> name
+    push rsi
+    lea rdi, [name_text]
+    call streq
+    pop rsi
+    test al, al
+    jnz .pick
+    cmp qword [sel_off], -1             ; else remember first exec section
+    jne .next
+    call .save_sel
+    jmp .next
+.pick:
+    call .save_sel
+    jmp .find_done
+.next:
+    inc r13
+    jmp .find_loop
+.save_sel:
+    mov rax, [shdr + SH_OFFSET]
+    mov [sel_off], rax
+    mov rax, [shdr + SH_SIZE]
+    mov [sel_size], rax
+    mov rax, [shdr + SH_ADDR]
+    mov [sel_addr], rax
+    mov [sel_name], rsi
+    ret
+.find_done:
+    cmp qword [sel_off], -1
+    je .none
+    mov rax, [sel_size]                 ; clamp to TEXT_CAP
+    cmp rax, TEXT_CAP
+    jbe .szok
+    mov rax, TEXT_CAP
+    mov qword [text_trunc], 1
+.szok:
+    mov [text_len], rax
+    mov rax, [sel_addr]
+    mov [text_vaddr], rax
+    mov rdi, r12                        ; read section bytes into textbuf
+    mov rsi, [sel_off]
+    xor edx, edx
+    mov rax, SYS_LSEEK
+    syscall
+    mov rdi, r12
+    lea rsi, [textbuf]
+    mov rdx, [text_len]
+    mov rax, SYS_READ
+    syscall
+    test rax, rax
+    js .none
+    mov [text_len], rax
+    PRINT dis_title                     ; header line
+    mov rsi, [sel_name]
+    call print_cstr
+    PRINT dis_colon_nl
+    lea rax, [textbuf]                  ; set up decode loop
+    mov [d_cur], rax
+    add rax, [text_len]
+    mov [d_end], rax
+.dloop:
+    mov rax, [d_cur]
+    cmp rax, [d_end]
+    jae .dend
+    lea rdx, [textbuf]                  ; vaddr of this instruction
+    sub rax, rdx
+    add rax, [text_vaddr]
+    mov [d_vaddr], rax
+    call decode_one
+    jmp .dloop
+.dend:
+    cmp qword [text_trunc], 0
+    je .ret
+    PRINT dis_trunc_note
+.ret:
+    ret
+.none:
+    lea rsi, [dis_nosect]
+    mov rdx, dis_nosect_len
+    call print_stderr
+    ret
+
+; --- byte stream access over textbuf (cursor in [d_cur], limit [d_end]) ---
+peek8:                         ; out: al = byte (0 at end, sets d_trunc)
+    mov rsi, [d_cur]
+    cmp rsi, [d_end]
+    jb .ok
+    mov byte [d_trunc], 1
+    xor eax, eax
+    ret
+.ok:
+    movzx eax, byte [rsi]
+    ret
+
+adv8:
+    inc qword [d_cur]
+    ret
+
+fetch8:                        ; out: al = next byte, cursor advanced
+    call peek8
+    push rax
+    call adv8
+    pop rax
+    ret
+
+; read_bytes_le - read cl (1..8) bytes little-endian; out rax zero-extended.
+read_bytes_le:
+    push rbx
+    push r12
+    xor eax, eax
+    xor r12d, r12d             ; shift amount
+    movzx ebx, cl              ; remaining count
+.loop:
+    test ebx, ebx
+    jz .done
+    push rax
+    call fetch8
+    movzx edx, al
+    pop rax
+    mov cl, r12b
+    shl rdx, cl
+    or rax, rdx
+    add r12d, 8
+    dec ebx
+    jmp .loop
+.done:
+    pop r12
+    pop rbx
+    ret
+
+; sign_extend - in: rax value, cl = width (1,2,4) -> rax sign-extended.
+sign_extend:
+    cmp cl, 1
+    je .s1
+    cmp cl, 2
+    je .s2
+    cmp cl, 4
+    je .s4
+    ret
+.s1:
+    movsx rax, al
+    ret
+.s2:
+    movsx rax, ax
+    ret
+.s4:
+    movsxd rax, eax
+    ret
+
+set_imm_vsize:                 ; imm width: 2 with 0x66, else 4
+    cmp byte [d_opsize], 1
+    je .w
+    mov byte [d_imm_size], 4
+    ret
+.w:
+    mov byte [d_imm_size], 2
+    ret
+
+read_disp:
+    movzx ecx, byte [d_disp_size]
+    test ecx, ecx
+    jz .none
+    call read_bytes_le
+    movzx ecx, byte [d_disp_size]
+    call sign_extend
+    mov [d_disp], rax
+.none:
+    ret
+
+read_imm:
+    movzx ecx, byte [d_imm_size]
+    test ecx, ecx
+    jz .none
+    call read_bytes_le
+    cmp byte [d_imm_signed], 1
+    jne .store
+    movzx ecx, byte [d_imm_size]
+    call sign_extend
+.store:
+    mov [d_imm], rax
+.none:
+    ret
+
+set_disp_by_mod:
+    cmp byte [d_mod], 1
+    je .d8
+    cmp byte [d_mod], 2
+    je .d32
+    mov byte [d_disp_size], 0
+    ret
+.d8:
+    mov byte [d_disp_size], 1
+    ret
+.d32:
+    mov byte [d_disp_size], 4
+    ret
+
+; parse_modrm - consume ModR/M (+ SIB) and set the operand fields.
+parse_modrm:
+    call fetch8
+    mov [d_modrm], al
+    mov cl, al                 ; mod
+    shr cl, 6
+    mov [d_mod], cl
+    mov dl, al                 ; reg + REX.R
+    shr dl, 3
+    and dl, 7
+    test byte [d_rex], 4
+    jz .r1
+    or dl, 8
+.r1:
+    mov [d_reg], dl
+    mov bl, al                 ; rm low 3 bits
+    and bl, 7
+    cmp byte [d_mod], 3
+    jne .mem
+    mov dl, bl                 ; register-direct rm
+    test byte [d_rex], 1
+    jz .r2
+    or dl, 8
+.r2:
+    mov [d_rm], dl
+    mov byte [d_mem], 0
+    ret
+.mem:
+    mov byte [d_mem], 1
+    cmp bl, 4
+    je .sib
+    cmp byte [d_mod], 0
+    jne .base
+    cmp bl, 5
+    jne .base
+    mov byte [d_riprel], 1     ; RIP-relative
+    mov byte [d_disp_size], 4
+    ret
+.base:
+    mov dl, bl
+    test byte [d_rex], 1
+    jz .r3
+    or dl, 8
+.r3:
+    mov [d_base], dl
+    mov byte [d_no_index], 1
+    call set_disp_by_mod
+    ret
+.sib:
+    call fetch8
+    mov [d_sibv], al
+    mov cl, al                 ; scale
+    shr cl, 6
+    mov [d_scale], cl
+    mov dl, al                 ; index
+    shr dl, 3
+    and dl, 7
+    cmp dl, 4
+    jne .have_index
+    test byte [d_rex], 2
+    jnz .have_index
+    mov byte [d_no_index], 1
+    jmp .sbase
+.have_index:
+    test byte [d_rex], 2
+    jz .hi
+    or dl, 8
+.hi:
+    mov [d_index], dl
+.sbase:
+    mov al, [d_sibv]
+    and al, 7
+    cmp al, 5
+    jne .sreg
+    cmp byte [d_mod], 0
+    jne .sreg5
+    mov byte [d_no_base], 1    ; mod==0, base==101 -> disp32 only
+    mov byte [d_disp_size], 4
+    ret
+.sreg5:
+    mov dl, 5
+    test byte [d_rex], 1
+    jz .sr5
+    or dl, 8
+.sr5:
+    mov [d_base], dl
+    call set_disp_by_mod
+    ret
+.sreg:
+    mov dl, al
+    test byte [d_rex], 1
+    jz .sr
+    or dl, 8
+.sr:
+    mov [d_base], dl
+    call set_disp_by_mod
+    ret
+
+reset_decode_state:
+    lea rdi, [dstate]
+    mov ecx, dstate_end - dstate
+    xor eax, eax
+    rep stosb
+    ret
+
+; cur_opnd_size - out: cl = operand size in bytes (1,2,4,8)
+cur_opnd_size:
+    cmp byte [d_byte], 1
+    je .s1
+    test byte [d_rex], 8       ; REX.W
+    jnz .s8
+    cmp byte [d_opsize], 1
+    je .s2
+    cmp byte [d_defsize8], 1
+    je .s8
+    mov cl, 4
+    ret
+.s8:
+    mov cl, 8
+    ret
+.s2:
+    mov cl, 2
+    ret
+.s1:
+    mov cl, 1
+    ret
+
+; emit_reg - al = index (0-15), cl = size (1,2,4,8); prints register name
+emit_reg:
+    push rbx
+    movzx ebx, al
+    cmp cl, 8
+    je .q
+    cmp cl, 4
+    je .d
+    cmp cl, 2
+    je .w
+    test byte [d_hasrex], 1    ; byte register
+    jnz .brex
+    cmp ebx, 4
+    jb .brex
+    cmp ebx, 8
+    jae .brex
+    lea rax, [regs8h]
+    mov rsi, [rax + rbx*8]
+    jmp .out
+.brex:
+    lea rax, [regs8]
+    mov rsi, [rax + rbx*8]
+    jmp .out
+.q:
+    lea rax, [regs64]
+    mov rsi, [rax + rbx*8]
+    jmp .out
+.d:
+    lea rax, [regs32]
+    mov rsi, [rax + rbx*8]
+    jmp .out
+.w:
+    lea rax, [regs16]
+    mov rsi, [rax + rbx*8]
+.out:
+    call print_cstr
+    pop rbx
+    ret
+
+; emit_disp_signed - print "+0x.." or "-0x.." for [d_disp]
+emit_disp_signed:
+    mov rax, [d_disp]
+    test rax, rax
+    js .neg
+    PRINT dis_plus
+    mov rax, [d_disp]
+    call print_hex
+    ret
+.neg:
+    PRINT dis_minus
+    mov rax, [d_disp]
+    neg rax
+    call print_hex
+    ret
+
+; emit_rm - cl = size; print the ModR/M r/m operand (register or memory)
+emit_rm:
+    cmp byte [d_mem], 0
+    jne .mem
+    mov al, [d_rm]
+    jmp emit_reg               ; tail call, cl already set
+.mem:
+    cmp byte [d_nosize], 1
+    je .nokw
+    push rcx                   ; size keyword
+    movzx eax, cl
+    cmp al, 1
+    je .k0
+    cmp al, 2
+    je .k1
+    cmp al, 4
+    je .k2
+    mov edx, 3
+    jmp .kk
+.k0:
+    xor edx, edx
+    jmp .kk
+.k1:
+    mov edx, 1
+    jmp .kk
+.k2:
+    mov edx, 2
+.kk:
+    lea rax, [sz_tbl]
+    mov rsi, [rax + rdx*8]
+    call print_cstr
+    pop rcx
+.nokw:
+    PRINT dis_lbr
+    cmp byte [d_riprel], 1
+    jne .notrip
+    PRINT dis_rip
+    call emit_disp_signed
+    jmp .close
+.notrip:
+    mov byte [first_printed], 0
+    cmp byte [d_no_base], 1
+    je .aftbase
+    mov al, [d_base]
+    push rcx
+    mov cl, 8
+    call emit_reg
+    pop rcx
+    mov byte [first_printed], 1
+.aftbase:
+    cmp byte [d_no_index], 1
+    je .aftindex
+    cmp byte [first_printed], 1
+    jne .noplus
+    PRINT dis_plus
+.noplus:
+    mov al, [d_index]
+    push rcx
+    mov cl, 8
+    call emit_reg
+    pop rcx
+    PRINT dis_star
+    movzx ecx, byte [d_scale]  ; scale = 1 << exponent
+    mov eax, 1
+    shl eax, cl
+    mov rax, rax
+    push rcx
+    call print_dec
+    pop rcx
+    mov byte [first_printed], 1
+.aftindex:
+    movzx eax, byte [d_disp_size]
+    test eax, eax
+    jz .close
+    cmp byte [first_printed], 1
+    jne .displead
+    call emit_disp_signed
+    jmp .close
+.displead:
+    mov rax, [d_disp]
+    call print_hex
+.close:
+    PRINT dis_rbr
+    ret
+
+emit_imm:
+    mov rax, [d_imm]
+    call print_hex
+    ret
+
+; print_byte_hex - al -> two lowercase hex chars on stdout
+print_byte_hex:
+    push rax
+    mov dl, al
+    shr dl, 4
+    mov al, dl
+    call nibble_hex
+    mov [bytebuf], al
+    pop rax
+    mov dl, al
+    and dl, 0xf
+    mov al, dl
+    call nibble_hex
+    mov [bytebuf + 1], al
+    lea rsi, [bytebuf]
+    mov rdx, 2
+    call print_str
+    ret
+
+; render_operands - print operands according to [d_style]
+render_operands:
+    movzx eax, byte [d_style]
+    cmp eax, ST_RM_REG
+    je .rm_reg
+    cmp eax, ST_REG_RM
+    je .reg_rm
+    cmp eax, ST_RM_IMM
+    je .rm_imm
+    cmp eax, ST_RM
+    je .rm
+    cmp eax, ST_REG_IMM
+    je .reg_imm
+    cmp eax, ST_OREG
+    je .oreg
+    cmp eax, ST_ACC_IMM
+    je .acc_imm
+    cmp eax, ST_REL
+    je .rel
+    cmp eax, ST_IMM
+    je .imm
+    cmp eax, ST_RM_1
+    je .rm_1
+    cmp eax, ST_RM_CL
+    je .rm_cl
+    cmp eax, ST_REG_RM_B
+    je .reg_rm_b
+    cmp eax, ST_REG_RM_IMM
+    je .reg_rm_imm
+    ret
+.rm_reg:
+    call cur_opnd_size
+    push rcx
+    call emit_rm
+    PRINT dis_comma
+    pop rcx
+    mov al, [d_reg]
+    call emit_reg
+    ret
+.reg_rm:
+    call cur_opnd_size
+    push rcx
+    mov al, [d_reg]
+    call emit_reg
+    PRINT dis_comma
+    pop rcx
+    call emit_rm
+    ret
+.rm_imm:
+    call cur_opnd_size
+    call emit_rm
+    PRINT dis_comma
+    call emit_imm
+    ret
+.rm:
+    call cur_opnd_size
+    call emit_rm
+    ret
+.reg_imm:
+    call cur_opnd_size
+    mov al, [d_reg]
+    call emit_reg
+    PRINT dis_comma
+    call emit_imm
+    ret
+.oreg:
+    call cur_opnd_size
+    mov al, [d_reg]
+    call emit_reg
+    ret
+.acc_imm:
+    call cur_opnd_size
+    xor al, al
+    call emit_reg
+    PRINT dis_comma
+    call emit_imm
+    ret
+.rel:
+    mov rax, [d_cur]
+    sub rax, [d_start]
+    add rax, [d_vaddr]
+    add rax, [d_imm]
+    call print_hex
+    ret
+.imm:
+    call emit_imm
+    ret
+.rm_1:
+    call cur_opnd_size
+    call emit_rm
+    PRINT dis_comma
+    PRINT dis_one
+    ret
+.rm_cl:
+    call cur_opnd_size
+    call emit_rm
+    PRINT dis_comma
+    PRINT dis_cl
+    ret
+.reg_rm_b:
+    call cur_opnd_size
+    push rcx
+    mov al, [d_reg]
+    call emit_reg
+    PRINT dis_comma
+    pop rcx
+    movzx ecx, byte [d_srcsz]
+    call emit_rm
+    ret
+.reg_rm_imm:
+    call cur_opnd_size
+    push rcx
+    mov al, [d_reg]
+    call emit_reg
+    PRINT dis_comma
+    mov rcx, [rsp]
+    call emit_rm
+    PRINT dis_comma
+    pop rcx
+    call emit_imm
+    ret
+
+; print_insn - render address, raw bytes and decoded instruction
+print_insn:
+    PRINT two_spaces
+    mov rax, [d_vaddr]
+    call print_hex
+    PRINT dis_colon
+    PRINT dis_space
+    mov rbx, [d_start]
+.bytes:
+    cmp rbx, [d_cur]
+    jae .bytes_done
+    movzx eax, byte [rbx]
+    push rbx
+    call print_byte_hex
+    PRINT dis_space
+    pop rbx
+    inc rbx
+    jmp .bytes
+.bytes_done:
+    mov rax, [d_cur]           ; pad bytes column to 30
+    sub rax, [d_start]
+    imul rax, 3
+    mov rdx, 30
+    sub rdx, rax
+    jle .mnem
+    lea rsi, [dis_pad]
+    call print_str
+.mnem:
+    mov rsi, [d_mnem]
+    test rsi, rsi
+    jz .done
+    mov ecx, 7
+    call print_cstr_pad
+    call render_operands
+.done:
+    PRINT nl
+    ret
+
+; print_byte_insn - fallback line ".byte 0x.." for one unknown byte
+print_byte_insn:
+    PRINT two_spaces
+    mov rax, [d_vaddr]
+    call print_hex
+    PRINT dis_colon
+    PRINT dis_space
+    mov rbx, [d_start]
+    movzx eax, byte [rbx]
+    call print_byte_hex
+    PRINT dis_space
+    mov rdx, 30 - 3
+    lea rsi, [dis_pad]
+    call print_str
+    PRINT dis_byte_db
+    PRINT dis_0x
+    mov rbx, [d_start]
+    movzx eax, byte [rbx]
+    call print_byte_hex
+    PRINT nl
+    ret
+
+; decode_one - decode and print a single instruction; out rax = length.
+decode_one:
+    call reset_decode_state
+    mov rax, [d_cur]
+    mov [d_start], rax
+.pfx:
+    call peek8
+    cmp al, 0x66
+    je .p66
+    cmp al, 0x67
+    je .p67
+    cmp al, 0xf0
+    je .pf0
+    cmp al, 0xf2
+    je .pf2
+    cmp al, 0xf3
+    je .pf3
+    cmp al, 0x2e
+    je .pseg
+    cmp al, 0x36
+    je .pseg
+    cmp al, 0x3e
+    je .pseg
+    cmp al, 0x26
+    je .pseg
+    cmp al, 0x64
+    je .pseg
+    cmp al, 0x65
+    je .pseg
+    jmp .pfx_done
+.p66:
+    mov byte [d_opsize], 1
+    call adv8
+    jmp .pfx
+.p67:
+    mov byte [d_addrsz], 1
+    call adv8
+    jmp .pfx
+.pf0:
+    mov byte [d_lock], 1
+    call adv8
+    jmp .pfx
+.pf2:
+    mov byte [d_repne], 1
+    call adv8
+    jmp .pfx
+.pf3:
+    mov byte [d_rep], 1
+    call adv8
+    jmp .pfx
+.pseg:
+    mov [d_seg], al
+    call adv8
+    jmp .pfx
+.pfx_done:
+    call peek8                 ; REX?
+    mov dl, al
+    and dl, 0xf0
+    cmp dl, 0x40
+    jne .norex
+    mov [d_rex], al
+    mov byte [d_hasrex], 1
+    call adv8
+.norex:
+    call fetch8                ; opcode
+    cmp al, 0x0f
+    je .two
+    mov [d_op], al
+    call decode_one_byte
+    jmp .finish
+.two:
+    call fetch8
+    call decode_two_byte
+.finish:
+    cmp byte [d_trunc], 1
+    je .as_byte
+    cmp byte [d_style], 0xff
+    je .as_byte
+    call print_insn
+    jmp .ret
+.as_byte:
+    mov rax, [d_start]
+    inc rax
+    mov [d_cur], rax
+    call print_byte_insn
+.ret:
+    mov rax, [d_cur]
+    sub rax, [d_start]
+    ret
+
+; decode_one_byte - in: al = opcode (also saved in [d_op]).
+decode_one_byte:
+    ; --- arithmetic block 0x00..0x3F (columns 0-5 of each group of 8) ---
+    cmp al, 0x40
+    jae .not_arith
+    mov bl, al
+    and bl, 7
+    cmp bl, 6
+    jae .not_arith
+    mov cl, al
+    shr cl, 3
+    movzx ecx, cl
+    lea rax, [grp_arith]
+    mov rsi, [rax + rcx*8]
+    mov [d_mnem], rsi
+    cmp bl, 0
+    je .ar0
+    cmp bl, 1
+    je .ar1
+    cmp bl, 2
+    je .ar2
+    cmp bl, 3
+    je .ar3
+    cmp bl, 4
+    je .ar4
+    mov byte [d_style], ST_ACC_IMM   ; col 5: eAX, imm
+    call set_imm_vsize
+    call read_imm
+    ret
+.ar4:
+    mov byte [d_byte], 1             ; col 4: AL, imm8
+    mov byte [d_style], ST_ACC_IMM
+    mov byte [d_imm_size], 1
+    call read_imm
+    ret
+.ar0:
+    mov byte [d_byte], 1
+    mov byte [d_style], ST_RM_REG
+    call parse_modrm
+    call read_disp
+    ret
+.ar1:
+    mov byte [d_style], ST_RM_REG
+    call parse_modrm
+    call read_disp
+    ret
+.ar2:
+    mov byte [d_byte], 1
+    mov byte [d_style], ST_REG_RM
+    call parse_modrm
+    call read_disp
+    ret
+.ar3:
+    mov byte [d_style], ST_REG_RM
+    call parse_modrm
+    call read_disp
+    ret
+.not_arith:
+    ; --- push/pop r64 (0x50..0x5F) ---
+    cmp al, 0x50
+    jb .c63
+    cmp al, 0x5f
+    ja .c63
+    mov bl, al
+    and bl, 7
+    test byte [d_rex], 1
+    jz .pp1
+    or bl, 8
+.pp1:
+    mov [d_reg], bl
+    mov byte [d_defsize8], 1
+    mov byte [d_style], ST_OREG
+    cmp al, 0x58
+    jb .ppush
+    lea rsi, [mn_pop]
+    jmp .pp2
+.ppush:
+    lea rsi, [mn_push]
+.pp2:
+    mov [d_mnem], rsi
+    ret
+.c63:
+    cmp al, 0x63                     ; movsxd r64, r/m32
+    jne .c68
+    lea rsi, [mn_movsxd]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_REG_RM_B
+    mov byte [d_srcsz], 4
+    call parse_modrm
+    call read_disp
+    ret
+.c68:
+    cmp al, 0x68                     ; push imm32
+    jne .c6a
+    lea rsi, [mn_push]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_IMM
+    call set_imm_vsize
+    mov byte [d_imm_signed], 1
+    call read_imm
+    ret
+.c6a:
+    cmp al, 0x6a                     ; push imm8
+    jne .c69
+    lea rsi, [mn_push]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_IMM
+    mov byte [d_imm_size], 1
+    mov byte [d_imm_signed], 1
+    call read_imm
+    ret
+.c69:
+    cmp al, 0x69                     ; imul r, r/m, imm32
+    jne .c6b
+    lea rsi, [mn_imul]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_REG_RM_IMM
+    call parse_modrm
+    call read_disp
+    call set_imm_vsize
+    mov byte [d_imm_signed], 1
+    call read_imm
+    ret
+.c6b:
+    cmp al, 0x6b                     ; imul r, r/m, imm8
+    jne .jcc8
+    lea rsi, [mn_imul]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_REG_RM_IMM
+    call parse_modrm
+    call read_disp
+    mov byte [d_imm_size], 1
+    mov byte [d_imm_signed], 1
+    call read_imm
+    ret
+.jcc8:
+    ; --- jcc rel8 (0x70..0x7F) ---
+    cmp al, 0x70
+    jb .grp1
+    cmp al, 0x7f
+    ja .grp1
+    mov bl, al
+    and bl, 0xf
+    movzx ebx, bl
+    lea rax, [jcc_tbl]
+    mov rsi, [rax + rbx*8]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_REL
+    mov byte [d_imm_size], 1
+    mov byte [d_imm_signed], 1
+    mov byte [d_is_rel], 1
+    call read_imm
+    ret
+.grp1:
+    ; --- group1 arithmetic with immediate (0x80..0x83) ---
+    cmp al, 0x80
+    jb .c84
+    cmp al, 0x83
+    ja .c84
+    cmp al, 0x81
+    je .g1v
+    cmp al, 0x80
+    je .g1b
+    cmp al, 0x82
+    je .g1b
+    jmp .g1parse                    ; 0x83
+.g1b:
+    mov byte [d_byte], 1
+.g1parse:
+    mov byte [d_style], ST_RM_IMM
+    call parse_modrm
+    call read_disp
+    movzx ecx, byte [d_reg]
+    and ecx, 7
+    lea rax, [grp_arith]
+    mov rsi, [rax + rcx*8]
+    mov [d_mnem], rsi
+    cmp byte [d_op], 0x81
+    je .g1immv
+    mov byte [d_imm_size], 1
+    cmp byte [d_op], 0x83
+    jne .g1rd
+    mov byte [d_imm_signed], 1
+.g1rd:
+    call read_imm
+    ret
+.g1v:
+    mov byte [d_style], ST_RM_IMM
+    call parse_modrm
+    call read_disp
+    movzx ecx, byte [d_reg]
+    and ecx, 7
+    lea rax, [grp_arith]
+    mov rsi, [rax + rcx*8]
+    mov [d_mnem], rsi
+.g1immv:
+    call set_imm_vsize
+    call read_imm
+    ret
+.c84:
+    cmp al, 0x84                     ; test r/m8, r8
+    jne .c85
+    mov byte [d_byte], 1
+    lea rsi, [mn_test]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_RM_REG
+    call parse_modrm
+    call read_disp
+    ret
+.c85:
+    cmp al, 0x85                     ; test r/m, r
+    jne .c86
+    lea rsi, [mn_test]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_RM_REG
+    call parse_modrm
+    call read_disp
+    ret
+.c86:
+    cmp al, 0x86                     ; xchg r/m8, r8
+    jne .c87
+    mov byte [d_byte], 1
+    lea rsi, [mn_xchg]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_RM_REG
+    call parse_modrm
+    call read_disp
+    ret
+.c87:
+    cmp al, 0x87                     ; xchg r/m, r
+    jne .c88
+    lea rsi, [mn_xchg]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_RM_REG
+    call parse_modrm
+    call read_disp
+    ret
+.c88:
+    cmp al, 0x88                     ; mov r/m8, r8
+    jne .c89
+    mov byte [d_byte], 1
+    lea rsi, [mn_mov]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_RM_REG
+    call parse_modrm
+    call read_disp
+    ret
+.c89:
+    cmp al, 0x89                     ; mov r/m, r
+    jne .c8a
+    lea rsi, [mn_mov]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_RM_REG
+    call parse_modrm
+    call read_disp
+    ret
+.c8a:
+    cmp al, 0x8a                     ; mov r8, r/m8
+    jne .c8b
+    mov byte [d_byte], 1
+    lea rsi, [mn_mov]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_REG_RM
+    call parse_modrm
+    call read_disp
+    ret
+.c8b:
+    cmp al, 0x8b                     ; mov r, r/m
+    jne .c8d
+    lea rsi, [mn_mov]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_REG_RM
+    call parse_modrm
+    call read_disp
+    ret
+.c8d:
+    cmp al, 0x8d                     ; lea r, m
+    jne .c8f
+    lea rsi, [mn_lea]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_REG_RM
+    mov byte [d_nosize], 1
+    call parse_modrm
+    call read_disp
+    ret
+.c8f:
+    cmp al, 0x8f                     ; pop r/m
+    jne .c90
+    lea rsi, [mn_pop]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_RM
+    mov byte [d_defsize8], 1
+    call parse_modrm
+    call read_disp
+    ret
+.c90:
+    cmp al, 0x90                     ; nop
+    jne .c98
+    lea rsi, [mn_nop]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_NONE
+    ret
+.c98:
+    cmp al, 0x98                     ; cwde / cdqe
+    jne .c99
+    test byte [d_rex], 8
+    jz .c98w
+    lea rsi, [mn_cdqe]
+    jmp .c98s
+.c98w:
+    lea rsi, [mn_cwde]
+.c98s:
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_NONE
+    ret
+.c99:
+    cmp al, 0x99                     ; cdq / cqo
+    jne .ca8
+    test byte [d_rex], 8
+    jz .c99w
+    lea rsi, [mn_cqo]
+    jmp .c99s
+.c99w:
+    lea rsi, [mn_cdq]
+.c99s:
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_NONE
+    ret
+.ca8:
+    cmp al, 0xa8                     ; test al, imm8
+    jne .ca9
+    mov byte [d_byte], 1
+    lea rsi, [mn_test]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_ACC_IMM
+    mov byte [d_imm_size], 1
+    call read_imm
+    ret
+.ca9:
+    cmp al, 0xa9                     ; test eAX, imm
+    jne .cb0
+    lea rsi, [mn_test]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_ACC_IMM
+    call set_imm_vsize
+    call read_imm
+    ret
+.cb0:
+    cmp al, 0xb0                     ; mov r8, imm8
+    jb .cb8
+    cmp al, 0xb7
+    ja .cb8
+    mov bl, al
+    and bl, 7
+    test byte [d_rex], 1
+    jz .b0r
+    or bl, 8
+.b0r:
+    mov [d_reg], bl
+    mov byte [d_byte], 1
+    lea rsi, [mn_mov]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_REG_IMM
+    mov byte [d_imm_size], 1
+    call read_imm
+    ret
+.cb8:
+    cmp al, 0xb8                     ; mov r, imm (movabs if REX.W)
+    jb .cc0
+    cmp al, 0xbf
+    ja .cc0
+    mov bl, al
+    and bl, 7
+    test byte [d_rex], 1
+    jz .b8r
+    or bl, 8
+.b8r:
+    mov [d_reg], bl
+    lea rsi, [mn_mov]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_REG_IMM
+    test byte [d_rex], 8
+    jz .b8_32
+    mov byte [d_imm_size], 8
+    jmp .b8_rd
+.b8_32:
+    call set_imm_vsize
+.b8_rd:
+    call read_imm
+    ret
+.cc0:
+    cmp al, 0xc0                     ; shift group r/m, imm8
+    jne .cc1
+    mov byte [d_byte], 1
+.cc0common:
+    mov byte [d_style], ST_RM_IMM
+    call parse_modrm
+    call read_disp
+    movzx ecx, byte [d_reg]
+    and ecx, 7
+    lea rax, [grp_shift]
+    mov rsi, [rax + rcx*8]
+    mov [d_mnem], rsi
+    mov byte [d_imm_size], 1
+    call read_imm
+    ret
+.cc1:
+    cmp al, 0xc1
+    jne .cc2
+    jmp .cc0common
+.cc2:
+    cmp al, 0xc2                     ; ret imm16
+    jne .cc3
+    lea rsi, [mn_ret]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_IMM
+    mov byte [d_imm_size], 2
+    call read_imm
+    ret
+.cc3:
+    cmp al, 0xc3                     ; ret
+    jne .cc6
+    lea rsi, [mn_ret]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_NONE
+    ret
+.cc6:
+    cmp al, 0xc6                     ; mov r/m8, imm8
+    jne .cc7
+    mov byte [d_byte], 1
+    lea rsi, [mn_mov]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_RM_IMM
+    call parse_modrm
+    call read_disp
+    mov byte [d_imm_size], 1
+    call read_imm
+    ret
+.cc7:
+    cmp al, 0xc7                     ; mov r/m, imm
+    jne .cc9
+    lea rsi, [mn_mov]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_RM_IMM
+    call parse_modrm
+    call read_disp
+    call set_imm_vsize
+    mov byte [d_imm_signed], 1
+    call read_imm
+    ret
+.cc9:
+    cmp al, 0xc9                     ; leave
+    jne .ccc
+    lea rsi, [mn_leave]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_NONE
+    ret
+.ccc:
+    cmp al, 0xcc                     ; int3
+    jne .cd0
+    lea rsi, [mn_int3]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_NONE
+    ret
+.cd0:
+    cmp al, 0xd0                     ; shift r/m, 1
+    jne .cd1
+    mov byte [d_byte], 1
+.cd0common:
+    mov byte [d_style], ST_RM_1
+    call parse_modrm
+    call read_disp
+    movzx ecx, byte [d_reg]
+    and ecx, 7
+    lea rax, [grp_shift]
+    mov rsi, [rax + rcx*8]
+    mov [d_mnem], rsi
+    ret
+.cd1:
+    cmp al, 0xd1
+    jne .cd2
+    jmp .cd0common
+.cd2:
+    cmp al, 0xd2                     ; shift r/m, cl
+    jne .cd3
+    mov byte [d_byte], 1
+.cd2common:
+    mov byte [d_style], ST_RM_CL
+    call parse_modrm
+    call read_disp
+    movzx ecx, byte [d_reg]
+    and ecx, 7
+    lea rax, [grp_shift]
+    mov rsi, [rax + rcx*8]
+    mov [d_mnem], rsi
+    ret
+.cd3:
+    cmp al, 0xd3
+    jne .ce8
+    jmp .cd2common
+.ce8:
+    cmp al, 0xe8                     ; call rel32
+    jne .ce9
+    lea rsi, [mn_call]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_REL
+    mov byte [d_imm_size], 4
+    mov byte [d_imm_signed], 1
+    mov byte [d_is_rel], 1
+    call read_imm
+    ret
+.ce9:
+    cmp al, 0xe9                     ; jmp rel32
+    jne .ceb
+    lea rsi, [mn_jmp]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_REL
+    mov byte [d_imm_size], 4
+    mov byte [d_imm_signed], 1
+    mov byte [d_is_rel], 1
+    call read_imm
+    ret
+.ceb:
+    cmp al, 0xeb                     ; jmp rel8
+    jne .cf4
+    lea rsi, [mn_jmp]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_REL
+    mov byte [d_imm_size], 1
+    mov byte [d_imm_signed], 1
+    mov byte [d_is_rel], 1
+    call read_imm
+    ret
+.cf4:
+    cmp al, 0xf4                     ; hlt
+    jne .cf6
+    lea rsi, [mn_hlt]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_NONE
+    ret
+.cf6:
+    cmp al, 0xf6                     ; group3 byte
+    jne .cf7
+    mov byte [d_byte], 1
+.cf6common:
+    call parse_modrm
+    call read_disp
+    movzx ecx, byte [d_reg]
+    and ecx, 7
+    lea rax, [grp_f7]
+    mov rsi, [rax + rcx*8]
+    mov [d_mnem], rsi
+    cmp ecx, 2                       ; reg 0/1 = test (has imm)
+    jae .f6_rm
+    mov byte [d_style], ST_RM_IMM
+    cmp byte [d_op], 0xf6
+    je .f6_imm8
+    call set_imm_vsize
+    call read_imm
+    ret
+.f6_imm8:
+    mov byte [d_imm_size], 1
+    call read_imm
+    ret
+.f6_rm:
+    mov byte [d_style], ST_RM
+    ret
+.cf7:
+    cmp al, 0xf7                     ; group3
+    jne .cfe
+    jmp .cf6common
+.cfe:
+    cmp al, 0xfe                     ; group4 inc/dec r/m8
+    jne .cff
+    mov byte [d_byte], 1
+    call parse_modrm
+    call read_disp
+    mov byte [d_style], ST_RM
+    movzx ecx, byte [d_reg]
+    and ecx, 7
+    cmp ecx, 0
+    jne .fe_dec
+    lea rsi, [mn_inc]
+    jmp .fe_set
+.fe_dec:
+    lea rsi, [mn_dec]
+.fe_set:
+    mov [d_mnem], rsi
+    ret
+.cff:
+    cmp al, 0xff                     ; group5
+    jne .cstr
+    call parse_modrm
+    call read_disp
+    mov byte [d_style], ST_RM
+    movzx ecx, byte [d_reg]
+    and ecx, 7
+    cmp ecx, 0
+    je .ff_inc
+    cmp ecx, 1
+    je .ff_dec
+    cmp ecx, 2
+    je .ff_call
+    cmp ecx, 4
+    je .ff_jmp
+    cmp ecx, 6
+    je .ff_push
+    jmp .unknown
+.ff_inc:
+    lea rsi, [mn_inc]
+    mov [d_mnem], rsi
+    ret
+.ff_dec:
+    lea rsi, [mn_dec]
+    mov [d_mnem], rsi
+    ret
+.ff_call:
+    lea rsi, [mn_call]
+    mov [d_mnem], rsi
+    mov byte [d_defsize8], 1
+    ret
+.ff_jmp:
+    lea rsi, [mn_jmp]
+    mov [d_mnem], rsi
+    mov byte [d_defsize8], 1
+    ret
+.ff_push:
+    lea rsi, [mn_push]
+    mov [d_mnem], rsi
+    mov byte [d_defsize8], 1
+    ret
+.cstr:
+    ; string operations: movs/cmps/stos/lods/scas (0xA4..0xA7, 0xAA..0xAF)
+    cmp al, 0xa4
+    jb .unknown
+    cmp al, 0xa7
+    jbe .cstr_do
+    cmp al, 0xaa
+    jb .unknown
+    cmp al, 0xaf
+    ja .unknown
+.cstr_do:
+    ; index into str_tbl = opcode - 0xa4
+    movzx ecx, al
+    sub ecx, 0xa4
+    lea rax, [str_tbl]
+    mov rsi, [rax + rcx*8]           ; base name pointer
+    ; compose into strmnem: optional rep prefix, then base, then size suffix
+    lea rdi, [strmnem]
+    ; --- prefix ---
+    cmp byte [d_rep], 1
+    je .cstr_rep
+    cmp byte [d_repne], 1
+    je .cstr_repne
+    jmp .cstr_base
+.cstr_rep:
+    ; cmps/scas use repz, others use rep
+    cmp byte [d_op], 0xa6
+    je .cstr_repz
+    cmp byte [d_op], 0xa7
+    je .cstr_repz
+    cmp byte [d_op], 0xae
+    je .cstr_repz
+    cmp byte [d_op], 0xaf
+    je .cstr_repz
+    lea rbx, [pfx_rep]
+    jmp .cstr_copy_pfx
+.cstr_repz:
+    lea rbx, [pfx_repz]
+    jmp .cstr_copy_pfx
+.cstr_repne:
+    lea rbx, [pfx_repnz]
+.cstr_copy_pfx:
+    mov al, [rbx]
+    test al, al
+    jz .cstr_base
+    mov [rdi], al
+    inc rdi
+    inc rbx
+    jmp .cstr_copy_pfx
+.cstr_base:
+    mov al, [rsi]
+    test al, al
+    jz .cstr_suffix
+    mov [rdi], al
+    inc rdi
+    inc rsi
+    jmp .cstr_base
+.cstr_suffix:
+    ; even opcode -> byte 'b'; odd -> w/d/q by operand size
+    test byte [d_op], 1
+    jz .cstr_b
+    test byte [d_rex], 8             ; REX.W -> q
+    jnz .cstr_q
+    cmp byte [d_opsize], 1           ; 0x66 -> w
+    je .cstr_w
+    mov al, 'd'
+    jmp .cstr_put
+.cstr_q:
+    mov al, 'q'
+    jmp .cstr_put
+.cstr_w:
+    mov al, 'w'
+    jmp .cstr_put
+.cstr_b:
+    mov al, 'b'
+.cstr_put:
+    mov [rdi], al
+    inc rdi
+    mov byte [rdi], 0
+    lea rsi, [strmnem]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_NONE
+    ret
+.unknown:
+    mov byte [d_style], 0xff
+    ret
+
+; decode_two_byte - in: al = second opcode byte (after 0x0F).
+decode_two_byte:
+    cmp al, 0x05                     ; syscall
+    jne .t1e
+    lea rsi, [mn_syscall]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_NONE
+    ret
+.t1e:
+    cmp al, 0x1e                     ; endbr64 / endbr32 / nop r/m
+    jne .t1f
+    mov byte [d_style], ST_NONE
+    call parse_modrm
+    call read_disp
+    cmp byte [d_rep], 1
+    jne .t1e_nop
+    cmp byte [d_modrm], 0xfa
+    jne .t1e_fb
+    lea rsi, [mn_endbr64]
+    mov [d_mnem], rsi
+    ret
+.t1e_fb:
+    lea rsi, [mn_nop]
+    mov [d_mnem], rsi
+    ret
+.t1e_nop:
+    lea rsi, [mn_nop]
+    mov [d_mnem], rsi
+    ret
+.t1f:
+    cmp al, 0x1f                     ; multi-byte nop r/m
+    jne .t80
+    lea rsi, [mn_nop]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_RM
+    call parse_modrm
+    call read_disp
+    ret
+.t80:
+    cmp al, 0x80                     ; jcc rel32
+    jb .t90
+    cmp al, 0x8f
+    ja .t90
+    mov bl, al
+    and bl, 0xf
+    movzx ebx, bl
+    lea rax, [jcc_tbl]
+    mov rsi, [rax + rbx*8]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_REL
+    mov byte [d_imm_size], 4
+    mov byte [d_imm_signed], 1
+    mov byte [d_is_rel], 1
+    call read_imm
+    ret
+.t90:
+    cmp al, 0x90                     ; setcc r/m8
+    jb .ta2
+    cmp al, 0x9f
+    ja .ta2
+    mov bl, al
+    and bl, 0xf
+    movzx ebx, bl
+    lea rax, [set_tbl]
+    mov rsi, [rax + rbx*8]
+    mov [d_mnem], rsi
+    mov byte [d_byte], 1
+    mov byte [d_style], ST_RM
+    call parse_modrm
+    call read_disp
+    ret
+.ta2:
+    cmp al, 0xa2                     ; cpuid
+    jne .taf
+    lea rsi, [mn_cpuid]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_NONE
+    ret
+.taf:
+    cmp al, 0xaf                     ; imul r, r/m
+    jne .tb6
+    lea rsi, [mn_imul]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_REG_RM
+    call parse_modrm
+    call read_disp
+    ret
+.tb6:
+    cmp al, 0xb6                     ; movzx r, r/m8
+    jne .tb7
+    lea rsi, [mn_movzx]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_REG_RM_B
+    mov byte [d_srcsz], 1
+    call parse_modrm
+    call read_disp
+    ret
+.tb7:
+    cmp al, 0xb7                     ; movzx r, r/m16
+    jne .tbe
+    lea rsi, [mn_movzx]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_REG_RM_B
+    mov byte [d_srcsz], 2
+    call parse_modrm
+    call read_disp
+    ret
+.tbe:
+    cmp al, 0xbe                     ; movsx r, r/m8
+    jne .tbf
+    lea rsi, [mn_movsx]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_REG_RM_B
+    mov byte [d_srcsz], 1
+    call parse_modrm
+    call read_disp
+    ret
+.tbf:
+    cmp al, 0xbf                     ; movsx r, r/m16
+    jne .tunknown
+    lea rsi, [mn_movsx]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_REG_RM_B
+    mov byte [d_srcsz], 2
+    call parse_modrm
+    call read_disp
+    ret
+.tunknown:
+    mov byte [d_style], 0xff
     ret
 
 ; ---------------------------------------------------------------------------

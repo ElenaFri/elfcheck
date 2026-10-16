@@ -17,8 +17,8 @@ A lightweight ELF64 binary inspector for Linux x86-64, written in NASM assembly.
 - [x] Report structural inconsistencies
 - [x] Export analysis results as JSON
 - [x] Add automated tests with valid and malformed ELF files
-- [ ] Disassemble machine code sections
-- [ ] Display assembly instructions with addresses and opcodes
+- [x] Disassemble machine code sections
+- [x] Display assembly instructions with addresses and opcodes
 - [ ] Detect potentially suspicious ELF properties
 - [ ] Check segment permissions and executable stack settings
 - [ ] Identify imported functions and dynamic dependencies
@@ -60,6 +60,21 @@ report (pipe through `jq` to pretty-print):
 
 ```bash
 ./elfcheck --json <file>
+```
+
+Disassemble the executable `.text` section (Intel syntax, with addresses and raw
+opcodes). The decoder covers the common x86-64 integer instruction set; SSE/AVX
+and other unhandled encodings are shown as `.byte` fallbacks:
+
+```bash
+./elfcheck --disasm <file>   # or: ./elfcheck -d <file>
+```
+
+The disassembly can be long; pipe it through a pager or the usual filters:
+
+```bash
+./elfcheck -d <file> | less
+./elfcheck -d <file> | grep call
 ```
 
 Exit codes: `0` valid with no structural issues, `1` usage/read error or not an
