@@ -231,6 +231,40 @@ if command -v gcc >/dev/null 2>&1; then
     fi
 fi
 
+# 10. Dynamic linking analysis (needed libraries + imported symbols)
+#     Our own binary is statically linked (ld -nostdlib).
+out="$("$BIN" "$BIN" 2>&1)"; code=$?
+check "dynamic section present"           0 "$code" "Dynamic:"            "$out"
+check "self reported statically linked"   0 "$code" "statically linked"   "$out"
+
+out="$("$BIN" --json "$BIN" 2>&1)"; code=$?
+check "--json has dynamic object"         0 "$code" '"dynamic":{'         "$out"
+check "--json self is static"             0 "$code" '"static":true'       "$out"
+
+# A dynamically-linked system ELF must list its libraries and imports.
+if [[ -r /bin/ls ]]; then
+    out="$("$BIN" /bin/ls 2>&1)"; code=$?
+    check "dynamic lists needed libraries" 0 "$code" "Needed libraries:"  "$out"
+    check "dynamic lists libc.so.6"        0 "$code" "libc.so.6"          "$out"
+    check "dynamic lists imported symbols" 0 "$code" "Imported symbols:"  "$out"
+    check "dynamic finds a known import"   0 "$code" "getenv"             "$out"
+
+    out="$("$BIN" --json /bin/ls 2>&1)"; code=$?
+    check "--json dynamic is not static"   0 "$code" '"static":false'      "$out"
+    check "--json lists needed array"      0 "$code" '"needed":['          "$out"
+    check "--json lists a needed lib"      0 "$code" '"libc.so.6"'         "$out"
+    check "--json lists imports array"     0 "$code" '"imports":['         "$out"
+
+    # JSON for a dynamic binary must stay well-formed
+    if command -v python3 >/dev/null 2>&1; then
+        if "$BIN" --json /bin/ls 2>/dev/null | python3 -m json.tool >/dev/null 2>&1; then
+            check "--json dynamic parses cleanly" 0 0 "" ""
+        else
+            check "--json dynamic parses cleanly" 0 1 "" ""
+        fi
+    fi
+fi
+
 echo
 echo "Results: $pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

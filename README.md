@@ -21,7 +21,7 @@ A lightweight ELF64 binary inspector for Linux x86-64, written in NASM assembly.
 - [x] Display assembly instructions with addresses and opcodes
 - [x] Detect potentially suspicious ELF properties
 - [x] Check segment permissions and executable stack settings
-- [ ] Identify imported functions and dynamic dependencies
+- [x] Identify imported functions and dynamic dependencies
 - [ ] Generate a security-oriented analysis report
 
 ## Requirements
@@ -82,6 +82,11 @@ writable and executable (`W^X`) `PT_LOAD` segments and sections, stack
 executability via `PT_GNU_STACK`, an entry point that falls outside any
 executable segment, and a stripped section header table. These findings are
 advisory and do not change the exit code.
+
+A `Dynamic:` section then reports dynamic linking: the shared libraries the file
+depends on (`DT_NEEDED`) and the symbols it imports (undefined `.dynsym`
+entries), or a note when the binary is statically linked. The same data appears
+under `"dynamic"` in `--json` output.
 
 Exit codes: `0` valid with no structural issues, `1` usage/read error or not an
 ELF file, `2` valid ELF header but structural inconsistencies were found.

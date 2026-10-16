@@ -79,6 +79,8 @@
 %define SH_ADDR      16
 %define SH_OFFSET    24
 %define SH_SIZE      32
+%define SH_LINK      40
+%define SH_ENTSIZE   56
 %define SH_ADDRALIGN 48
 %define SHF_WRITE    0x1
 %define SHF_EXECINSTR 0x4
@@ -97,6 +99,9 @@
 
 ; max bytes of an executable section we disassemble
 %define TEXT_CAP    262144
+
+; max bytes of the dynamic string table we buffer
+%define DYNSTR_CAP  262144
 
 ; operand rendering styles for the disassembler
 %define ST_NONE     0
@@ -275,6 +280,15 @@ section .rodata
     s_noshdr:       db "  [!] no section header table (section info stripped)", 10, 0
     sec_summary:    db " security warning(s) found", 10, 0
 
+    ; ---- dynamic linking analysis ----
+    dyn_title:      db 10, "Dynamic:", 10, 0
+    dyn_static:     db "  statically linked (no dynamic section)", 10, 0
+    dyn_nosh:       db "  no section headers; dynamic info unavailable", 10, 0
+    dyn_needed_hdr: db "  Needed libraries:", 10, 0
+    dyn_imports_hdr:db "  Imported symbols:", 10, 0
+    dyn_none:       db "    (none)", 10, 0
+    dyn_indent:     db "    ", 0
+
     ; ---- program header (segment) type names ----
     pt_null:        db "NULL", 0
     pt_load:        db "LOAD", 0
@@ -345,6 +359,10 @@ section .rodata
     jv_st_absent:   db "absent", 0
     jv_st_noexec:   db "noexec", 0
     jv_st_exec:     db "exec", 0
+    jk_dynamic:     db 34, "dynamic", 34, ":", 0
+    jk_static:      db 34, "static", 34, ":", 0
+    jk_needed:      db 34, "needed", 34, ":", 0
+    jk_imports:     db 34, "imports", 34, ":", 0
 
     ; ---- disassembler literals ----
     dis_title:      db 10, "Disassembly of section ", 0
@@ -573,6 +591,18 @@ section .bss
     shdr:           resb 64            ; one section header entry (64 used)
     strtab:         resb STRTAB_CAP + 1 ; section-name string table (+1 NUL)
     strtab_size:    resq 1             ; bytes actually loaded into strtab
+    dynstr:         resb DYNSTR_CAP + 1 ; dynamic string table (+1 NUL)
+    dynstr_len:     resq 1             ; bytes actually loaded into dynstr
+    dynent:         resb 16            ; one Elf64_Dyn entry
+    syment:         resb 24            ; one Elf64_Sym entry
+    dyn_off:        resq 1             ; .dynamic file offset
+    dyn_size:       resq 1             ; .dynamic size
+    dyn_link:       resd 1             ; .dynamic sh_link (string table index)
+    dsym_off:       resq 1             ; .dynsym file offset
+    dsym_size:      resq 1             ; .dynsym size
+    dsym_ent:       resq 1             ; .dynsym entry size
+    dsym_link:      resd 1             ; .dynsym sh_link (string table index)
+    dyn_is_static:  resb 1             ; 1 = no .dynamic section found
     filesize:       resq 1             ; total file size (bytes)
     issues:         resq 1             ; count of structural problems found
     warnings:       resq 1             ; count of security concerns found
@@ -724,6 +754,7 @@ _start:
     call print_section_headers ; reads sections via fd in r12
     call validate_structure    ; sanity-check offsets, counts [issues]
     call check_security        ; segment perms + stack exec, counts [warnings]
+    call analyze_dynamic       ; needed libraries + imported symbols
     jmp .after_output
 .emit_json:
     call print_json            ; emits everything + counts [issues]
@@ -1769,6 +1800,274 @@ check_security:
     ret
 
 ; ---------------------------------------------------------------------------
+; find_section - locate the first section header of a given type.
+;   in:  eax = SH_TYPE to find
+;   out: rax = section index, or -1 if none; matching header left in [shdr]
+;   fd is in r12 (preserved).  rbx/r13/r14 saved for the caller.
+; ---------------------------------------------------------------------------
+find_section:
+    push rbx
+    push r13
+    push r14
+    mov ebx, eax                ; target section type
+    movzx r14d, word [ehdr + E_SHNUM]
+    xor r13, r13
+.fs_loop:
+    cmp r13, r14
+    jae .fs_notfound
+    movzx eax, word [ehdr + E_SHENTSIZE]
+    imul rax, r13
+    add rax, [ehdr + E_SHOFF]
+    mov rdi, r12
+    mov rsi, rax
+    xor edx, edx
+    mov rax, SYS_LSEEK
+    syscall
+    mov rdi, r12
+    lea rsi, [shdr]
+    mov rdx, SHDR_SIZE
+    mov rax, SYS_READ
+    syscall
+    cmp rax, SHDR_SIZE
+    jl .fs_notfound
+    mov eax, dword [shdr + SH_TYPE]
+    cmp eax, ebx
+    je .fs_found
+    inc r13
+    jmp .fs_loop
+.fs_found:
+    mov rax, r13
+    pop r14
+    pop r13
+    pop rbx
+    ret
+.fs_notfound:
+    mov rax, -1
+    pop r14
+    pop r13
+    pop rbx
+    ret
+
+; ---------------------------------------------------------------------------
+; load_dynstr - read a string-table section (by index) into [dynstr];
+;   byte count stored in [dynstr_len] (0 on failure).  Overwrites [shdr].
+;   in: eax = section index of the string table
+; ---------------------------------------------------------------------------
+load_dynstr:
+    mov qword [dynstr_len], 0
+    test eax, eax
+    jz .ld_ret                 ; index 0 = no string table
+    movzx ecx, word [ehdr + E_SHENTSIZE]
+    imul rax, rcx
+    add rax, [ehdr + E_SHOFF]
+    mov rdi, r12
+    mov rsi, rax
+    xor edx, edx
+    mov rax, SYS_LSEEK
+    syscall
+    mov rdi, r12
+    lea rsi, [shdr]
+    mov rdx, SHDR_SIZE
+    mov rax, SYS_READ
+    syscall
+    cmp rax, SHDR_SIZE
+    jl .ld_ret
+    mov rdx, [shdr + SH_SIZE]  ; clamp request to DYNSTR_CAP
+    cmp rdx, DYNSTR_CAP
+    jbe .ld_cap
+    mov rdx, DYNSTR_CAP
+.ld_cap:
+    mov rdi, r12
+    mov rsi, [shdr + SH_OFFSET]
+    push rdx
+    xor edx, edx
+    mov rax, SYS_LSEEK
+    syscall
+    pop rdx
+    mov rdi, r12
+    lea rsi, [dynstr]
+    mov rax, SYS_READ
+    syscall
+    test rax, rax
+    js .ld_ret                 ; error -> len stays 0
+    mov [dynstr_len], rax
+    lea rsi, [dynstr]          ; guarantee NUL termination
+    mov byte [rsi + rax], 0
+.ld_ret:
+    ret
+
+; ---------------------------------------------------------------------------
+; dynstr_name_ptr - resolve an offset into the dynamic string table.
+;   in:  rax = byte offset
+;   out: rsi -> NUL-terminated name (empty_str if out of range)
+; ---------------------------------------------------------------------------
+dynstr_name_ptr:
+    cmp rax, [dynstr_len]
+    jae .dn_empty
+    lea rsi, [dynstr]
+    add rsi, rax
+    ret
+.dn_empty:
+    lea rsi, [empty_str]
+    ret
+
+; ---------------------------------------------------------------------------
+; print_needed - list DT_NEEDED entries from the .dynamic section.
+;   uses [dyn_off]/[dyn_size]; dynstr must already be loaded.
+; ---------------------------------------------------------------------------
+print_needed:
+    PRINT dyn_needed_hdr
+    mov r14, [dyn_size]
+    shr r14, 4                 ; count = size / 16
+    xor r13, r13
+    xor rbx, rbx               ; number of DT_NEEDED printed
+.pn_loop:
+    cmp r13, r14
+    jae .pn_done
+    mov rax, r13
+    shl rax, 4                 ; index * 16
+    add rax, [dyn_off]
+    mov rdi, r12
+    mov rsi, rax
+    xor edx, edx
+    mov rax, SYS_LSEEK
+    syscall
+    mov rdi, r12
+    lea rsi, [dynent]
+    mov rdx, 16
+    mov rax, SYS_READ
+    syscall
+    cmp rax, 16
+    jl .pn_done
+    mov rax, [dynent]          ; d_tag
+    test rax, rax
+    jz .pn_done                ; DT_NULL terminates the array
+    cmp rax, 1                 ; DT_NEEDED
+    jne .pn_next
+    mov rax, [dynent + 8]      ; d_val = string-table offset
+    call dynstr_name_ptr
+    push rsi
+    PRINT dyn_indent
+    pop rsi
+    call print_cstr
+    PRINT nl
+    inc rbx
+.pn_next:
+    inc r13
+    jmp .pn_loop
+.pn_done:
+    test rbx, rbx
+    jnz .pn_ret
+    PRINT dyn_none
+.pn_ret:
+    ret
+
+; ---------------------------------------------------------------------------
+; print_imports - list undefined (imported) symbols from .dynsym.
+;   uses [dsym_off]/[dsym_size]/[dsym_ent]; dynstr must already be loaded.
+; ---------------------------------------------------------------------------
+print_imports:
+    PRINT dyn_imports_hdr
+    mov rcx, [dsym_ent]
+    test rcx, rcx
+    jz .pi_none                ; no entry size -> nothing to iterate
+    mov rax, [dsym_size]
+    xor rdx, rdx
+    div rcx                    ; rax = count = size / entsize
+    mov r14, rax
+    xor r13, r13
+    xor rbx, rbx               ; number of imports printed
+.pi_loop:
+    cmp r13, r14
+    jae .pi_done
+    mov rax, r13
+    mul qword [dsym_ent]       ; index * entsize (result in rax)
+    add rax, [dsym_off]
+    mov rdi, r12
+    mov rsi, rax
+    xor edx, edx
+    mov rax, SYS_LSEEK
+    syscall
+    mov rdi, r12
+    lea rsi, [syment]
+    mov rdx, 24
+    mov rax, SYS_READ
+    syscall
+    cmp rax, 24
+    jl .pi_done
+    movzx eax, word [syment + 6]  ; st_shndx
+    test eax, eax
+    jnz .pi_next               ; defined here -> not an import
+    mov eax, dword [syment]       ; st_name
+    test eax, eax
+    jz .pi_next                ; no name -> skip
+    call dynstr_name_ptr
+    push rsi
+    PRINT dyn_indent
+    pop rsi
+    call print_cstr
+    PRINT nl
+    inc rbx
+.pi_next:
+    inc r13
+    jmp .pi_loop
+.pi_done:
+    test rbx, rbx
+    jnz .pi_ret
+.pi_none:
+    PRINT dyn_none
+.pi_ret:
+    ret
+
+; ---------------------------------------------------------------------------
+; analyze_dynamic - print the "Dynamic:" section: needed libraries and
+;   imported symbols, or a note when the binary is statically linked.
+; ---------------------------------------------------------------------------
+analyze_dynamic:
+    PRINT dyn_title
+    mov byte [dyn_is_static], 0
+    cmp word [ehdr + E_SHNUM], 0
+    jne .ad_haveshn
+    PRINT dyn_nosh
+    ret
+.ad_haveshn:
+    mov eax, 6                 ; SHT_DYNAMIC
+    call find_section
+    cmp rax, -1
+    jne .ad_dynamic
+    mov byte [dyn_is_static], 1
+    PRINT dyn_static
+    ret
+.ad_dynamic:
+    ; snapshot .dynamic location before load_dynstr overwrites [shdr]
+    mov rax, [shdr + SH_OFFSET]
+    mov [dyn_off], rax
+    mov rax, [shdr + SH_SIZE]
+    mov [dyn_size], rax
+    mov eax, dword [shdr + SH_LINK]
+    mov [dyn_link], eax
+    mov eax, dword [dyn_link]  ; load .dynstr (via .dynamic sh_link)
+    call load_dynstr
+    call print_needed
+    mov eax, 11                ; SHT_DYNSYM
+    call find_section
+    cmp rax, -1
+    je .ad_ret
+    mov rax, [shdr + SH_OFFSET]
+    mov [dsym_off], rax
+    mov rax, [shdr + SH_SIZE]
+    mov [dsym_size], rax
+    mov rax, [shdr + SH_ENTSIZE]
+    mov [dsym_ent], rax
+    mov eax, dword [shdr + SH_LINK]
+    mov [dsym_link], eax
+    mov eax, dword [dsym_link]
+    call load_dynstr
+    call print_imports
+.ad_ret:
+    ret
+
+; ---------------------------------------------------------------------------
 ; streq - compare two NUL-terminated strings.
 ;   in:  rsi, rdi = string pointers
 ;   out: al = 1 if equal, else 0.  rsi/rdi preserved.
@@ -1836,6 +2135,8 @@ print_json:
     call json_validation
     PRINT j_comma
     call json_security
+    PRINT j_comma
+    call json_dynamic
     PRINT j_rbrace
     PRINT nl
     ret
@@ -2175,6 +2476,159 @@ json_security:
     mov rax, [warnings]
     call print_dec
     PRINT j_rbrace
+    ret
+
+; json_dynamic - "dynamic":{"static":bool,"needed":[..],"imports":[..]}
+json_dynamic:
+    PRINT jk_dynamic
+    PRINT j_lbrace
+    PRINT jk_static
+    cmp word [ehdr + E_SHNUM], 0
+    je .jd_static
+    mov eax, 6                  ; SHT_DYNAMIC
+    call find_section
+    cmp rax, -1
+    jne .jd_dynamic
+.jd_static:
+    PRINT j_true
+    PRINT j_comma
+    PRINT jk_needed
+    PRINT j_lbrack
+    PRINT j_rbrack
+    PRINT j_comma
+    PRINT jk_imports
+    PRINT j_lbrack
+    PRINT j_rbrack
+    PRINT j_rbrace
+    ret
+.jd_dynamic:
+    PRINT j_false
+    mov rax, [shdr + SH_OFFSET]
+    mov [dyn_off], rax
+    mov rax, [shdr + SH_SIZE]
+    mov [dyn_size], rax
+    mov eax, dword [shdr + SH_LINK]
+    mov [dyn_link], eax
+    mov eax, dword [dyn_link]
+    call load_dynstr
+    PRINT j_comma
+    PRINT jk_needed
+    PRINT j_lbrack
+    call json_needed_arr
+    PRINT j_rbrack
+    PRINT j_comma
+    PRINT jk_imports
+    PRINT j_lbrack
+    mov eax, 11                 ; SHT_DYNSYM
+    call find_section
+    cmp rax, -1
+    je .jd_noimp
+    mov rax, [shdr + SH_OFFSET]
+    mov [dsym_off], rax
+    mov rax, [shdr + SH_SIZE]
+    mov [dsym_size], rax
+    mov rax, [shdr + SH_ENTSIZE]
+    mov [dsym_ent], rax
+    mov eax, dword [shdr + SH_LINK]
+    mov [dsym_link], eax
+    mov eax, dword [dsym_link]
+    call load_dynstr
+    call json_imports_arr
+.jd_noimp:
+    PRINT j_rbrack
+    PRINT j_rbrace
+    ret
+
+; json_needed_arr - emit comma-separated JSON strings for DT_NEEDED libs
+json_needed_arr:
+    mov r14, [dyn_size]
+    shr r14, 4
+    xor r13, r13
+    xor rbx, rbx
+.jn_loop:
+    cmp r13, r14
+    jae .jn_done
+    mov rax, r13
+    shl rax, 4
+    add rax, [dyn_off]
+    mov rdi, r12
+    mov rsi, rax
+    xor edx, edx
+    mov rax, SYS_LSEEK
+    syscall
+    mov rdi, r12
+    lea rsi, [dynent]
+    mov rdx, 16
+    mov rax, SYS_READ
+    syscall
+    cmp rax, 16
+    jl .jn_done
+    mov rax, [dynent]
+    test rax, rax
+    jz .jn_done
+    cmp rax, 1                  ; DT_NEEDED
+    jne .jn_next
+    test rbx, rbx
+    jz .jn_nocomma
+    PRINT j_comma
+.jn_nocomma:
+    mov rax, [dynent + 8]
+    call dynstr_name_ptr
+    call jstr
+    inc rbx
+.jn_next:
+    inc r13
+    jmp .jn_loop
+.jn_done:
+    ret
+
+; json_imports_arr - emit comma-separated JSON strings for imported symbols
+json_imports_arr:
+    mov rcx, [dsym_ent]
+    test rcx, rcx
+    jz .ji_done
+    mov rax, [dsym_size]
+    xor rdx, rdx
+    div rcx
+    mov r14, rax
+    xor r13, r13
+    xor rbx, rbx
+.ji_loop:
+    cmp r13, r14
+    jae .ji_done
+    mov rax, r13
+    mul qword [dsym_ent]
+    add rax, [dsym_off]
+    mov rdi, r12
+    mov rsi, rax
+    xor edx, edx
+    mov rax, SYS_LSEEK
+    syscall
+    mov rdi, r12
+    lea rsi, [syment]
+    mov rdx, 24
+    mov rax, SYS_READ
+    syscall
+    cmp rax, 24
+    jl .ji_done
+    movzx eax, word [syment + 6]
+    test eax, eax
+    jnz .ji_next
+    mov eax, dword [syment]
+    test eax, eax
+    jz .ji_next
+    test rbx, rbx
+    jz .ji_nocomma
+    PRINT j_comma
+.ji_nocomma:
+    mov eax, dword [syment]
+    call dynstr_name_ptr
+    call jstr
+    inc rbx
+.ji_next:
+    inc r13
+    jmp .ji_loop
+.ji_done:
     ret
 
 ; ---------------------------------------------------------------------------
