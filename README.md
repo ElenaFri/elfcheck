@@ -20,7 +20,7 @@ A lightweight ELF64 binary inspector for Linux x86-64, written in NASM assembly.
 - [x] Disassemble machine code sections
 - [x] Display assembly instructions with addresses and opcodes
 - [ ] Detect potentially suspicious ELF properties
-- [ ] Check segment permissions and executable stack settings
+- [x] Check segment permissions and executable stack settings
 - [ ] Identify imported functions and dynamic dependencies
 - [ ] Generate a security-oriented analysis report
 
@@ -76,6 +76,10 @@ The disassembly can be long; pipe it through a pager or the usual filters:
 ./elfcheck -d <file> | less
 ./elfcheck -d <file> | grep call
 ```
+
+The default report ends with a `Security:` section that flags writable and
+executable (`W^X`) `PT_LOAD` segments and inspects stack executability via
+`PT_GNU_STACK`. These findings are advisory and do not change the exit code.
 
 Exit codes: `0` valid with no structural issues, `1` usage/read error or not an
 ELF file, `2` valid ELF header but structural inconsistencies were found.

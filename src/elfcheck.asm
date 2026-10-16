@@ -57,6 +57,10 @@
 %define P_FILESZ    32
 %define P_MEMSZ     40
 %define P_ALIGN     48
+%define PT_GNU_STACK 0x6474e551
+%define PF_X        1
+%define PF_W        2
+%define PF_R        4
 
 ; ---- program header table column widths ----
 %define W_IDX       5
@@ -255,6 +259,15 @@ section .rodata
     m_rparen:       db ")", 0
     m_issues:       db " issue(s) found", 10, 0
 
+    ; ---- security analysis messages ----
+    sec_title:      db 10, "Security:", 10, 0
+    sec_ok:         db "  [ok] no security concerns detected", 10, 0
+    s_execstack:    db "  [!] executable stack (PT_GNU_STACK carries the X flag)", 10, 0
+    s_nostack:      db "  [!] no PT_GNU_STACK segment (stack executability unspecified)", 10, 0
+    s_wx_pre:       db "  [!] segment ", 0
+    s_wx_post:      db " is writable and executable (W^X violation)", 10, 0
+    sec_summary:    db " security warning(s) found", 10, 0
+
     ; ---- program header (segment) type names ----
     pt_null:        db "NULL", 0
     pt_load:        db "LOAD", 0
@@ -314,6 +327,14 @@ section .rodata
     jk_addralign:   db 34, "addralign", 34, ":", 0
     jk_issues:      db 34, "issues", 34, ":", 0
     jk_valid:       db 34, "valid", 34, ":", 0
+    jk_security:    db 34, "security", 34, ":", 0
+    jk_gnustack:    db 34, "gnu_stack", 34, ":", 0
+    jk_execstack:   db 34, "executable_stack", 34, ":", 0
+    jk_wxseg:       db 34, "wx_segments", 34, ":", 0
+    jk_warnings:    db 34, "warnings", 34, ":", 0
+    jv_st_absent:   db "absent", 0
+    jv_st_noexec:   db "noexec", 0
+    jv_st_exec:     db "exec", 0
 
     ; ---- disassembler literals ----
     dis_title:      db 10, "Disassembly of section ", 0
@@ -544,6 +565,9 @@ section .bss
     strtab_size:    resq 1             ; bytes actually loaded into strtab
     filesize:       resq 1             ; total file size (bytes)
     issues:         resq 1             ; count of structural problems found
+    warnings:       resq 1             ; count of security concerns found
+    sec_wx:         resq 1             ; count of W^X (writable+executable) segments
+    sec_stack:      resb 1             ; GNU_STACK: 0=absent 1=non-exec 2=exec
     flagbuf:        resb 4             ; "RWX" flag string + NUL
     shflagbuf:      resb 16            ; section flag letters + NUL
     nread:          resq 1             ; bytes actually read
@@ -687,6 +711,7 @@ _start:
     call print_program_headers ; reads segments via fd in r12
     call print_section_headers ; reads sections via fd in r12
     call validate_structure    ; sanity-check offsets, counts [issues]
+    call check_security        ; segment perms + stack exec, counts [warnings]
     jmp .after_output
 .emit_json:
     call print_json            ; emits everything + counts [issues]
@@ -1577,6 +1602,89 @@ validate_structure:
     ret
 
 ; ---------------------------------------------------------------------------
+; check_security - inspect segment permissions and stack executability.
+; Flags W^X (writable + executable) segments and the PT_GNU_STACK state, and
+; counts findings in [warnings].  Uses VP/vdec so it doubles as a silent
+; counter for the JSON path.  Uses fd in r12; r13=index, r14=phnum.
+; ---------------------------------------------------------------------------
+check_security:
+    VP sec_title
+    mov qword [warnings], 0
+    mov qword [sec_wx], 0
+    mov byte [sec_stack], 0            ; assume GNU_STACK absent
+    movzx r14d, word [ehdr + E_PHNUM]
+    test r14, r14
+    jz .stack
+    xor r13, r13
+.cs_loop:
+    cmp r13, r14
+    jae .stack
+    movzx eax, word [ehdr + E_PHENTSIZE]
+    imul rax, r13
+    add rax, [ehdr + E_PHOFF]
+    mov rdi, r12                       ; lseek(fd, offset, SEEK_SET)
+    mov rsi, rax
+    xor edx, edx
+    mov rax, SYS_LSEEK
+    syscall
+    mov rdi, r12                       ; read(fd, phdr, PHDR_SIZE)
+    lea rsi, [phdr]
+    mov rdx, PHDR_SIZE
+    mov rax, SYS_READ
+    syscall
+    cmp rax, PHDR_SIZE
+    jl .stack                         ; short read -> stop scanning
+    ; --- PT_GNU_STACK tracking ---
+    mov eax, dword [phdr + P_TYPE]
+    cmp eax, PT_GNU_STACK
+    jne .cs_wx
+    mov byte [sec_stack], 1            ; present, non-executable
+    test byte [phdr + P_FLAGS], PF_X
+    jz .cs_wx
+    mov byte [sec_stack], 2            ; present and executable
+.cs_wx:
+    ; --- W^X violation: a loadable (PT_LOAD) segment with both W and X ---
+    cmp dword [phdr + P_TYPE], 1       ; PT_LOAD only; GNU_STACK handled below
+    jne .cs_next
+    mov al, byte [phdr + P_FLAGS]
+    and al, (PF_W | PF_X)
+    cmp al, (PF_W | PF_X)
+    jne .cs_next
+    VP s_wx_pre
+    mov rax, r13
+    call vdec
+    VP s_wx_post
+    inc qword [warnings]
+    inc qword [sec_wx]
+.cs_next:
+    inc r13
+    jmp .cs_loop
+.stack:
+    cmp byte [sec_stack], 2
+    je .stack_exec
+    cmp byte [sec_stack], 0
+    je .stack_absent
+    jmp .summary                      ; state 1 = non-executable stack: fine
+.stack_exec:
+    VP s_execstack
+    inc qword [warnings]
+    jmp .summary
+.stack_absent:
+    VP s_nostack
+    inc qword [warnings]
+.summary:
+    cmp qword [warnings], 0
+    jne .some
+    VP sec_ok
+    ret
+.some:
+    VP two_spaces
+    mov rax, [warnings]
+    call vdec
+    VP sec_summary
+    ret
+
+; ---------------------------------------------------------------------------
 ; streq - compare two NUL-terminated strings.
 ;   in:  rsi, rdi = string pointers
 ;   out: al = 1 if equal, else 0.  rsi/rdi preserved.
@@ -1642,6 +1750,8 @@ print_json:
     call json_shdrs
     PRINT j_comma
     call json_validation
+    PRINT j_comma
+    call json_security
     PRINT j_rbrace
     PRINT nl
     ret
@@ -1911,6 +2021,49 @@ json_validation:
 .jv_invalid:
     PRINT j_false
 .jv_close:
+    PRINT j_rbrace
+    ret
+
+; json_security - "security":{"gnu_stack":"...","executable_stack":bool,
+;                 "wx_segments":N,"warnings":N}
+; Runs check_security silently to populate the counters.
+json_security:
+    PRINT jk_security
+    PRINT j_lbrace
+    mov byte [silent], 1
+    call check_security
+    mov byte [silent], 0
+    PRINT jk_gnustack
+    cmp byte [sec_stack], 2
+    je .js_exec
+    cmp byte [sec_stack], 1
+    je .js_noexec
+    lea rsi, [jv_st_absent]
+    jmp .js_stname
+.js_noexec:
+    lea rsi, [jv_st_noexec]
+    jmp .js_stname
+.js_exec:
+    lea rsi, [jv_st_exec]
+.js_stname:
+    call jname
+    PRINT j_comma
+    PRINT jk_execstack
+    cmp byte [sec_stack], 2
+    jne .js_nx
+    PRINT j_true
+    jmp .js_wx
+.js_nx:
+    PRINT j_false
+.js_wx:
+    PRINT j_comma
+    PRINT jk_wxseg
+    mov rax, [sec_wx]
+    call print_dec
+    PRINT j_comma
+    PRINT jk_warnings
+    mov rax, [warnings]
+    call print_dec
     PRINT j_rbrace
     ret
 

@@ -147,6 +147,45 @@ check "-d alias works"                    0 "$code" "Disassembly of section .tex
 out="$("$BIN" "$BIN" -d 2>&1)"; code=$?
 check "-d accepted after path"            0 "$code" "Disassembly of section .text:" "$out"
 
+# 9. Security analysis (segment permissions + stack executability)
+out="$("$BIN" "$BIN" 2>&1)"; code=$?
+check "security section present"          0 "$code" "Security:" "$out"
+
+out="$("$BIN" --json "$BIN" 2>&1)"; code=$?
+check "--json has security object"       0 "$code" '"security":{'  "$out"
+check "--json has gnu_stack field"       0 "$code" '"gnu_stack":' "$out"
+
+# W^X detection: craft an RWX PT_LOAD segment (needs python3)
+if command -v python3 >/dev/null 2>&1; then
+    wx="$TMP/wx.elf"; cp "$BIN" "$wx"
+    python3 - "$wx" <<'PY'
+import sys, struct
+p = sys.argv[1]; d = bytearray(open(p, 'rb').read())
+off = struct.unpack_from('<Q', d, 32)[0]
+es  = struct.unpack_from('<H', d, 54)[0]
+n   = struct.unpack_from('<H', d, 56)[0]
+for i in range(n):
+    b = off + i * es
+    t = struct.unpack_from('<I', d, b)[0]
+    f = struct.unpack_from('<I', d, b + 4)[0]
+    if t == 1 and (f & 1):           # PT_LOAD with X -> add W
+        struct.pack_into('<I', d, b + 4, f | 2)
+        break
+open(p, 'wb').write(d)
+PY
+    out="$("$BIN" "$wx" 2>&1)"; code=$?
+    check "W^X LOAD segment detected"     0 "$code" "W^X violation"  "$out"
+fi
+
+# Executable stack detection (needs gcc)
+if command -v gcc >/dev/null 2>&1; then
+    printf 'int main(void){return 0;}\n' > "$TMP/es.c"
+    if gcc -z execstack -o "$TMP/es.elf" "$TMP/es.c" 2>/dev/null; then
+        out="$("$BIN" "$TMP/es.elf" 2>&1)"; code=$?
+        check "executable stack detected"  0 "$code" "executable stack" "$out"
+    fi
+fi
+
 echo
 echo "Results: $pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
