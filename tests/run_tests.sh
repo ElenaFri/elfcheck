@@ -145,7 +145,80 @@ if command -v python3 >/dev/null 2>&1; then
     check "--json is well-formed JSON" 0 "$pcode" "" ""
 fi
 
-# 8. Disassembler mode
+# 8. Symbol tables (opt-in text section, complete in JSON)
+out="$("$BIN" --symbols "$BIN" 2>&1)"; code=$?
+check "--symbols handles a static ELF"       0 "$code" ".symtab" "$out"
+check "--symbols finds the static entry point" 0 "$code" "_start" "$out"
+check_absent "static ELF has no dynamic symbol table" 0 "$code" "Symbol table '.dynsym'" "$out"
+
+if command -v gcc >/dev/null 2>&1; then
+    cat > "$TMP/symbols.c" <<'EOF'
+int elfcheck_symbol_fixture(int value) { return value + 7; }
+int main(void) { return elfcheck_symbol_fixture(1); }
+EOF
+    if gcc -g -O0 -o "$TMP/symbols.elf" "$TMP/symbols.c" 2>/dev/null; then
+        out="$("$BIN" --symbols "$TMP/symbols.elf" 2>&1)"; code=$?
+        check "--symbols exits 0 for valid ELF"    0 "$code" "Symbol Tables:" "$out"
+        check "--symbols lists static table"       0 "$code" ".symtab" "$out"
+        check "--symbols lists dynamic table"      0 "$code" ".dynsym" "$out"
+        check "--symbols resolves a defined name"  0 "$code" "elfcheck_symbol_fixture" "$out"
+        check "--symbols prints type and binding"  0 "$code" "FUNC" "$out"
+
+        out="$("$BIN" "$TMP/symbols.elf" --symbols 2>&1)"; code=$?
+        check "--symbols accepted after path"      0 "$code" "Symbol Tables:" "$out"
+
+        out="$("$BIN" --header --symbols "$TMP/symbols.elf" 2>&1)"; code=$?
+        check "combined filter includes symbols"   0 "$code" "Symbol Tables:" "$out"
+        check "combined filter includes header"    0 "$code" "ELF Header:" "$out"
+        check_absent "combined filter hides hardening" 0 "$code" "Hardening:" "$out"
+
+        out="$("$BIN" "$TMP/symbols.elf" 2>&1)"; code=$?
+        check_absent "default report keeps symbols opt-in" 0 "$code" "Symbol Tables:" "$out"
+
+        out="$("$BIN" --json "$TMP/symbols.elf" 2>&1)"; code=$?
+        check "JSON includes symbol table array" 0 "$code" '"symbol_tables":[' "$out"
+        check "JSON includes symbol metadata"   0 "$code" '"binding":"GLOBAL"' "$out"
+        check "JSON includes fixture symbol"     0 "$code" '"name":"elfcheck_symbol_fixture"' "$out"
+        if command -v python3 >/dev/null 2>&1; then
+            printf '%s' "$out" | python3 -m json.tool >/dev/null 2>&1
+            pcode=$?
+            check "JSON with symbol tables parses" 0 "$pcode" "" ""
+            printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); syms=[s for t in d["symbol_tables"] for s in t["symbols"]]; assert syms and all(isinstance(s["section_index"], int) and (s["section_kind"] is None or isinstance(s["section_kind"], str)) for s in syms)'
+            pcode=$?
+            check "JSON symbol section fields are typed" 0 "$pcode" "" ""
+        fi
+
+        if command -v strip >/dev/null 2>&1; then
+            cp "$TMP/symbols.elf" "$TMP/symbols.stripped.elf"
+            if strip --strip-all "$TMP/symbols.stripped.elf" 2>/dev/null; then
+                out="$("$BIN" --symbols "$TMP/symbols.stripped.elf" 2>&1)"; code=$?
+                check "stripped ELF retains dynamic symbols" 0 "$code" ".dynsym" "$out"
+                check_absent "stripped ELF has no static symbol table" 0 "$code" ".symtab" "$out"
+            fi
+        fi
+
+        if command -v python3 >/dev/null 2>&1; then
+            cp "$TMP/symbols.elf" "$TMP/bad-symbols.elf"
+            python3 - "$TMP/bad-symbols.elf" <<'PY'
+import struct, sys
+p = sys.argv[1]
+d = bytearray(open(p, 'rb').read())
+off = struct.unpack_from('<Q', d, 40)[0]
+es = struct.unpack_from('<H', d, 58)[0]
+n = struct.unpack_from('<H', d, 60)[0]
+for i in range(n):
+    at = off + i * es
+    if struct.unpack_from('<I', d, at + 4)[0] in (2, 11):
+        struct.pack_into('<Q', d, at + 56, 0)
+open(p, 'wb').write(d)
+PY
+            out="$("$BIN" --symbols "$TMP/bad-symbols.elf" 2>&1)"; code=$?
+            check "zero symbol entry size is handled safely" 0 "$code" "invalid symbol table metadata" "$out"
+        fi
+    fi
+fi
+
+# 9. Disassembler mode
 out="$("$BIN" --disasm "$BIN" 2>&1)"; code=$?
 check "--disasm exits 0 for valid ELF"   0 "$code" "Disassembly of section .text:" "$out"
 check "--disasm decodes syscall"         0 "$code" "syscall" "$out"
@@ -320,6 +393,7 @@ fi
 # 12. CLI section filters and help
 out="$("$BIN" --help 2>&1)"; code=$?
 check "--help prints usage, exit 0"       0 "$code" "Usage:" "$out"
+check "--help documents --symbols"       0 "$code" "--symbols" "$out"
 out="$("$BIN" -h 2>&1)"; code=$?
 check "-h alias prints usage, exit 0"     0 "$code" "Usage:" "$out"
 

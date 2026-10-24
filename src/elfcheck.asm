@@ -75,7 +75,7 @@
 %define DF_BIND_NOW  0x8
 %define DF_1_NOW     0x1
 
-; ---- section-selection filter bits (0 = no filter = show everything) ----
+; ---- section-selection filter bits (0 = use the standard report) ----
 %define FILT_HEADER    1
 %define FILT_SEGMENTS  2
 %define FILT_SECTIONS  4
@@ -83,7 +83,8 @@
 %define FILT_SECURITY  16
 %define FILT_DYNAMIC   32
 %define FILT_HARDENING 64
-%define FILT_ALL       0x7f
+%define FILT_SYMBOLS   128
+%define FILT_DEFAULT   0x7f
 
 ; ---- program header table column widths ----
 %define W_IDX       5
@@ -188,8 +189,8 @@ section .rodata
     usage_msg:      db "Usage: elfcheck [options] <file>", 10
                     db "  Output modes:   --json   --disasm | -d", 10
                     db "  Section filters: --header --segments --sections --validate", 10
-                    db "                   --security --dynamic --hardening", 10
-                    db "                   (none given = show all sections)", 10
+                    db "                   --security --dynamic --hardening --symbols", 10
+                    db "                   (default report; use --symbols for tables)", 10
                     db "  --help | -h     show this help", 10
     usage_len:      equ $ - usage_msg
 
@@ -201,6 +202,7 @@ section .rodata
     opt_security:   db "--security", 0
     opt_dynamic:    db "--dynamic", 0
     opt_hardening:  db "--hardening", 0
+    opt_symbols:    db "--symbols", 0
     opt_help:       db "--help", 0
     opt_help_s:     db "-h", 0
 
@@ -351,6 +353,40 @@ section .rodata
     dyn_none:       db "    (none)", 10, 0
     dyn_indent:     db "    ", 0
 
+    ; ---- symbol table report ----
+    sym_title:      db 10, "Symbol Tables:", 10, 0
+    sym_none:       db "  (no symbol tables found)", 10, 0
+    sym_table_pre:  db "Symbol table '", 0
+    sym_table_mid:  db "' (index ", 0
+    sym_table_cnt:  db ") contains ", 0
+    sym_table_end:  db " entries:", 10, 0
+    sym_colhdr:     db "  Num   Value               Size Type       Bind       Vis        Ndx      Name", 10, 0
+    sym_bad_meta:   db "  [!] invalid symbol table metadata; entries skipped", 10, 0
+    sym_bad_strtab: db "  [!] invalid or unavailable linked string table; names omitted", 10, 0
+    sym_type_symtab:db "SYMTAB", 0
+    sym_type_dynsym:db "DYNSYM", 0
+    sym_und:        db "UND", 0
+    sym_abs:        db "ABS", 0
+    sym_com:        db "COM", 0
+    sym_xindex:     db "XINDEX", 0
+    sym_notype:     db "NOTYPE", 0
+    sym_object:     db "OBJECT", 0
+    sym_func:       db "FUNC", 0
+    sym_section:    db "SECTION", 0
+    sym_file:       db "FILE", 0
+    sym_common:     db "COMMON", 0
+    sym_tls:        db "TLS", 0
+    sym_ifunc:      db "IFUNC", 0
+    sym_local:      db "LOCAL", 0
+    sym_global:     db "GLOBAL", 0
+    sym_weak:       db "WEAK", 0
+    sym_unique:     db "UNIQUE", 0
+    sym_default:    db "DEFAULT", 0
+    sym_internal:   db "INTERNAL", 0
+    sym_hidden:     db "HIDDEN", 0
+    sym_protected:  db "PROTECTED", 0
+    sym_unknown:    db "UNKNOWN", 0
+
     ; ---- hardening report (checksec-style) ----
     hd_title:       db 10, "Hardening:", 10, 0
     hd_relro_lbl:   db "  RELRO:         ", 0
@@ -449,6 +485,16 @@ section .rodata
     jk_static:      db 34, "static", 34, ":", 0
     jk_needed:      db 34, "needed", 34, ":", 0
     jk_imports:     db 34, "imports", 34, ":", 0
+    jk_symbol_tables: db 34, "symbol_tables", 34, ":", 0
+    jk_symbols:     db 34, "symbols", 34, ":", 0
+    jk_kind:        db 34, "kind", 34, ":", 0
+    jk_entry_count: db 34, "entry_count", 34, ":", 0
+    jk_value:       db 34, "value", 34, ":", 0
+    jk_binding:     db 34, "binding", 34, ":", 0
+    jk_visibility:  db 34, "visibility", 34, ":", 0
+    jk_section_index: db 34, "section_index", 34, ":", 0
+    jk_section_kind: db 34, "section_kind", 34, ":", 0
+    jk_strings_valid: db 34, "string_table_valid", 34, ":", 0
     jk_hardening:   db 34, "hardening", 34, ":", 0
     jk_relro:       db 34, "relro", 34, ":", 0
     jk_canary:      db 34, "stack_canary", 34, ":", 0
@@ -728,10 +774,27 @@ section .bss
     json_mode:      resb 1             ; 1 = emit JSON instead of text
     disasm_mode:    resb 1             ; 1 = disassemble .text instead of report
     help_mode:      resb 1             ; 1 = --help/-h given
-    filter_mask:    resb 1             ; selected section bits (0 = show all)
+    filter_mask:    resb 1             ; selected section bits (0 = use default sections)
     eff_mask:       resb 1             ; effective mask used while printing
     silent:         resb 1             ; 1 = validate_structure suppresses output
     jbuf:           resb 8             ; scratch for JSON byte escaping
+
+    ; ---- symbol table state ----
+    sym_json_mode:  resb 1
+    sym_table_valid: resb 1
+    sym_str_valid:  resb 1
+    sym_table_first: resb 1
+    sym_item_first: resb 1
+    sym_table_index: resq 1
+    sym_table_type: resd 1
+    sym_table_name: resq 1
+    sym_table_offset: resq 1
+    sym_table_size: resq 1
+    sym_table_entsize: resq 1
+    sym_table_link: resd 1
+    sym_entry_count: resq 1
+    sym_entry_index: resq 1
+    sym_tables_found: resq 1
 
     ; ---- disassembler state ----
     textbuf:        resb TEXT_CAP      ; raw bytes of the section being decoded
@@ -816,6 +879,7 @@ _start:
     FILTARG opt_security,  FILT_SECURITY
     FILTARG opt_dynamic,   FILT_DYNAMIC
     FILTARG opt_hardening, FILT_HARDENING
+    FILTARG opt_symbols,   FILT_SYMBOLS
     mov rsi, [r9 + rcx*8]
     test r10, r10            ; otherwise it's the path (only one allowed)
     jnz .usage
@@ -868,7 +932,7 @@ _start:
     movzx eax, byte [filter_mask]
     test al, al
     jnz .mask_set
-    mov al, FILT_ALL
+    mov al, FILT_DEFAULT
 .mask_set:
     mov [eff_mask], al
     test byte [eff_mask], FILT_HEADER
@@ -880,8 +944,12 @@ _start:
     call print_program_headers ; reads segments via fd in r12
 .f_sec:
     test byte [eff_mask], FILT_SECTIONS
-    jz .f_val
+    jz .f_symbols
     call print_section_headers ; reads sections via fd in r12
+.f_symbols:
+    test byte [eff_mask], FILT_SYMBOLS
+    jz .f_val
+    call print_symbol_tables
 .f_val:
     ; validation always runs so the exit code stays meaningful; it prints
     ; only when selected, otherwise it just counts [issues] silently.
@@ -2062,6 +2130,492 @@ dynstr_name_ptr:
     ret
 
 ; ---------------------------------------------------------------------------
+; Symbol tables. These are opt-in in the text report because they can be large;
+; JSON remains complete and always includes them.
+; ---------------------------------------------------------------------------
+print_symbol_tables:
+    PRINT sym_title
+    mov byte [sym_json_mode], 0
+    call walk_symbol_tables
+    cmp qword [sym_tables_found], 0
+    jne .pst_done
+    PRINT sym_none
+.pst_done:
+    ret
+
+json_symbol_tables:
+    PRINT jk_symbol_tables
+    PRINT j_lbrack
+    mov byte [sym_json_mode], 1
+    mov byte [sym_table_first], 1
+    call walk_symbol_tables
+    mov byte [sym_json_mode], 0
+    PRINT j_rbrack
+    ret
+
+; walk_symbol_tables scans SHT_SYMTAB and SHT_DYNSYM sections. All section and
+; symbol reads are range-checked before access. r12 is the input file descriptor.
+walk_symbol_tables:
+    mov qword [sym_tables_found], 0
+    mov rdi, r12
+    xor esi, esi
+    mov edx, SEEK_END
+    mov eax, SYS_LSEEK
+    syscall
+    test rax, rax
+    js .wst_done
+    mov [filesize], rax
+
+    movzx r14d, word [ehdr + E_SHNUM]
+    test r14, r14
+    jz .wst_done
+    movzx ecx, word [ehdr + E_SHENTSIZE]
+    cmp ecx, SHDR_SIZE
+    jb .wst_done
+    mov rax, r14
+    mul rcx
+    test rdx, rdx
+    jnz .wst_done
+    add rax, [ehdr + E_SHOFF]
+    jc .wst_done
+    cmp rax, [filesize]
+    ja .wst_done
+
+    call load_shstrtab
+    xor r13, r13
+.wst_scan:
+    cmp r13, r14
+    jae .wst_done
+    movzx eax, word [ehdr + E_SHENTSIZE]
+    imul rax, r13
+    add rax, [ehdr + E_SHOFF]
+    mov rdi, r12
+    mov rsi, rax
+    xor edx, edx
+    mov eax, SYS_LSEEK
+    syscall
+    mov rdi, r12
+    lea rsi, [shdr]
+    mov edx, SHDR_SIZE
+    mov eax, SYS_READ
+    syscall
+    cmp rax, SHDR_SIZE
+    jl .wst_done
+
+    mov eax, dword [shdr + SH_TYPE]
+    cmp eax, 2                    ; SHT_SYMTAB
+    je .wst_symtab
+    cmp eax, 11                   ; SHT_DYNSYM
+    jne .wst_next
+    mov dword [sym_table_type], 11
+    jmp .wst_match
+.wst_symtab:
+    mov dword [sym_table_type], 2
+.wst_match:
+    mov [sym_table_index], r13
+    mov rax, [shdr + SH_OFFSET]
+    mov [sym_table_offset], rax
+    mov rax, [shdr + SH_SIZE]
+    mov [sym_table_size], rax
+    mov rax, [shdr + SH_ENTSIZE]
+    mov [sym_table_entsize], rax
+    mov eax, dword [shdr + SH_LINK]
+    mov [sym_table_link], eax
+    call section_name_ptr
+    mov [sym_table_name], rsi
+
+    mov byte [sym_table_valid], 1
+    mov qword [sym_entry_count], 0
+    mov rax, [sym_table_entsize]
+    cmp rax, 24                  ; Elf64_Sym is 24 bytes
+    jb .wst_bad_table
+    mov rax, [sym_table_offset]
+    add rax, [sym_table_size]
+    jc .wst_bad_table
+    cmp rax, [filesize]
+    ja .wst_bad_table
+    mov rax, [sym_table_size]
+    xor edx, edx
+    div qword [sym_table_entsize]
+    test rdx, rdx
+    jnz .wst_bad_table
+    mov [sym_entry_count], rax
+    jmp .wst_table_valid
+.wst_bad_table:
+    mov byte [sym_table_valid], 0
+.wst_table_valid:
+    mov qword [dynstr_len], 0
+    mov byte [sym_str_valid], 0
+    mov eax, dword [sym_table_link]
+    test eax, eax
+    jz .wst_string_ready
+    movzx ecx, word [ehdr + E_SHNUM]
+    cmp eax, ecx
+    jae .wst_string_ready
+    call load_dynstr
+    cmp dword [shdr + SH_TYPE], 3 ; SHT_STRTAB
+    jne .wst_string_bad
+    mov byte [sym_str_valid], 1
+    jmp .wst_string_ready
+.wst_string_bad:
+    mov qword [dynstr_len], 0
+.wst_string_ready:
+    inc qword [sym_tables_found]
+    cmp byte [sym_json_mode], 0
+    jne .wst_json_table
+    call emit_symbol_table_text_header
+    jmp .wst_emit_table
+.wst_json_table:
+    call emit_symbol_table_json_header
+.wst_emit_table:
+    mov qword [sym_entry_index], 0
+    mov byte [sym_item_first], 1
+.wst_symbol_loop:
+    mov rax, [sym_entry_index]
+    cmp rax, [sym_entry_count]
+    jae .wst_symbol_done
+    mul qword [sym_table_entsize]
+    test rdx, rdx
+    jnz .wst_symbol_done
+    add rax, [sym_table_offset]
+    jc .wst_symbol_done
+    mov rdi, r12
+    mov rsi, rax
+    xor edx, edx
+    mov eax, SYS_LSEEK
+    syscall
+    mov rdi, r12
+    lea rsi, [syment]
+    mov edx, 24
+    mov eax, SYS_READ
+    syscall
+    cmp rax, 24
+    jl .wst_symbol_done
+    cmp byte [sym_json_mode], 0
+    jne .wst_emit_json_symbol
+    call emit_symbol_text
+    jmp .wst_next_symbol
+.wst_emit_json_symbol:
+    call emit_symbol_json
+.wst_next_symbol:
+    inc qword [sym_entry_index]
+    jmp .wst_symbol_loop
+.wst_symbol_done:
+    cmp byte [sym_json_mode], 0
+    je .wst_next
+    PRINT j_rbrack
+    PRINT j_rbrace
+.wst_next:
+    inc r13
+    jmp .wst_scan
+.wst_done:
+    ret
+
+emit_symbol_table_text_header:
+    PRINT sym_table_pre
+    mov rsi, [sym_table_name]
+    call print_cstr
+    PRINT sym_table_mid
+    mov rax, [sym_table_index]
+    call print_dec
+    PRINT sym_table_cnt
+    mov rax, [sym_entry_count]
+    call print_dec
+    PRINT sym_table_end
+    PRINT sym_colhdr
+    cmp byte [sym_table_valid], 0
+    jne .esth_strtab
+    PRINT sym_bad_meta
+.esth_strtab:
+    cmp byte [sym_str_valid], 0
+    jne .esth_done
+    PRINT sym_bad_strtab
+.esth_done:
+    ret
+
+emit_symbol_table_json_header:
+    cmp byte [sym_table_first], 1
+    je .estj_first
+    PRINT j_comma
+.estj_first:
+    mov byte [sym_table_first], 0
+    PRINT j_lbrace
+    PRINT jk_index
+    mov rax, [sym_table_index]
+    call print_dec
+    PRINT j_comma
+    PRINT jk_name
+    mov rsi, [sym_table_name]
+    call jstr
+    PRINT j_comma
+    PRINT jk_kind
+    cmp dword [sym_table_type], 2
+    jne .estj_dynsym
+    lea rsi, [sym_type_symtab]
+    jmp .estj_kind
+.estj_dynsym:
+    lea rsi, [sym_type_dynsym]
+.estj_kind:
+    call jname
+    PRINT j_comma
+    PRINT jk_entry_count
+    mov rax, [sym_entry_count]
+    call print_dec
+    PRINT j_comma
+    PRINT jk_valid
+    cmp byte [sym_table_valid], 0
+    je .estj_invalid
+    PRINT j_true
+    jmp .estj_strings
+.estj_invalid:
+    PRINT j_false
+.estj_strings:
+    PRINT j_comma
+    PRINT jk_strings_valid
+    cmp byte [sym_str_valid], 0
+    je .estj_no_strings
+    PRINT j_true
+    jmp .estj_symbols
+.estj_no_strings:
+    PRINT j_false
+.estj_symbols:
+    PRINT j_comma
+    PRINT jk_symbols
+    PRINT j_lbrack
+    ret
+
+emit_symbol_text:
+    PRINT two_spaces
+    mov rax, [sym_entry_index]
+    mov ecx, 6
+    call pfield_dec
+    mov rax, [syment + 8]
+    mov ecx, 19
+    call pfield_hex
+    mov rax, [syment + 16]
+    mov ecx, 10
+    call pfield_dec
+    movzx eax, byte [syment + 4]
+    and eax, 0x0f
+    call symbol_type_name
+    mov rsi, rax
+    mov ecx, 11
+    call print_cstr_pad
+    movzx eax, byte [syment + 4]
+    shr eax, 4
+    call symbol_binding_name
+    mov rsi, rax
+    mov ecx, 11
+    call print_cstr_pad
+    movzx eax, byte [syment + 5]
+    and eax, 3
+    call symbol_visibility_name
+    mov rsi, rax
+    mov ecx, 11
+    call print_cstr_pad
+    movzx eax, word [syment + 6]
+    cmp eax, 0
+    je .est_und
+    cmp eax, 0xfff1
+    je .est_abs
+    cmp eax, 0xfff2
+    je .est_com
+    cmp eax, 0xffff
+    je .est_xindex
+    mov ecx, 9
+    call pfield_dec
+    jmp .est_name
+.est_und:
+    lea rsi, [sym_und]
+    jmp .est_special
+.est_abs:
+    lea rsi, [sym_abs]
+    jmp .est_special
+.est_com:
+    lea rsi, [sym_com]
+    jmp .est_special
+.est_xindex:
+    lea rsi, [sym_xindex]
+.est_special:
+    mov ecx, 9
+    call print_cstr_pad
+.est_name:
+    mov eax, dword [syment]
+    call dynstr_name_ptr
+    call print_cstr
+    PRINT nl
+    ret
+
+emit_symbol_json:
+    cmp byte [sym_item_first], 1
+    je .esj_first
+    PRINT j_comma
+.esj_first:
+    mov byte [sym_item_first], 0
+    PRINT j_lbrace
+    PRINT jk_name
+    mov eax, dword [syment]
+    call dynstr_name_ptr
+    call jstr
+    PRINT j_comma
+    PRINT jk_value
+    mov rax, [syment + 8]
+    call jhex
+    PRINT j_comma
+    PRINT jk_size
+    mov rax, [syment + 16]
+    call print_dec
+    PRINT j_comma
+    PRINT jk_type
+    movzx eax, byte [syment + 4]
+    and eax, 0x0f
+    call symbol_type_name
+    mov rsi, rax
+    call jname
+    PRINT j_comma
+    PRINT jk_binding
+    movzx eax, byte [syment + 4]
+    shr eax, 4
+    call symbol_binding_name
+    mov rsi, rax
+    call jname
+    PRINT j_comma
+    PRINT jk_visibility
+    movzx eax, byte [syment + 5]
+    and eax, 3
+    call symbol_visibility_name
+    mov rsi, rax
+    call jname
+    PRINT j_comma
+    PRINT jk_section_index
+    movzx eax, word [syment + 6]
+    call print_dec
+    PRINT j_comma
+    PRINT jk_section_kind
+    call emit_symbol_json_section_kind
+    PRINT j_rbrace
+    ret
+
+emit_symbol_json_section_kind:
+    movzx eax, word [syment + 6]
+    cmp eax, 0
+    je .esjk_und
+    cmp eax, 0xfff1
+    je .esjk_abs
+    cmp eax, 0xfff2
+    je .esjk_com
+    cmp eax, 0xffff
+    je .esjk_xindex
+    PRINT j_null
+    ret
+.esjk_und:
+    lea rsi, [sym_und]
+    jmp .esjk_string
+.esjk_abs:
+    lea rsi, [sym_abs]
+    jmp .esjk_string
+.esjk_com:
+    lea rsi, [sym_com]
+    jmp .esjk_string
+.esjk_xindex:
+    lea rsi, [sym_xindex]
+.esjk_string:
+    call jname
+    ret
+
+symbol_type_name:
+    cmp eax, 0
+    je .stn_notype
+    cmp eax, 1
+    je .stn_object
+    cmp eax, 2
+    je .stn_func
+    cmp eax, 3
+    je .stn_section
+    cmp eax, 4
+    je .stn_file
+    cmp eax, 5
+    je .stn_common
+    cmp eax, 6
+    je .stn_tls
+    cmp eax, 10
+    je .stn_ifunc
+    lea rax, [sym_unknown]
+    ret
+.stn_notype:
+    lea rax, [sym_notype]
+    ret
+.stn_object:
+    lea rax, [sym_object]
+    ret
+.stn_func:
+    lea rax, [sym_func]
+    ret
+.stn_section:
+    lea rax, [sym_section]
+    ret
+.stn_file:
+    lea rax, [sym_file]
+    ret
+.stn_common:
+    lea rax, [sym_common]
+    ret
+.stn_tls:
+    lea rax, [sym_tls]
+    ret
+.stn_ifunc:
+    lea rax, [sym_ifunc]
+    ret
+
+symbol_binding_name:
+    cmp eax, 0
+    je .sbn_local
+    cmp eax, 1
+    je .sbn_global
+    cmp eax, 2
+    je .sbn_weak
+    cmp eax, 10
+    je .sbn_unique
+    lea rax, [sym_unknown]
+    ret
+.sbn_local:
+    lea rax, [sym_local]
+    ret
+.sbn_global:
+    lea rax, [sym_global]
+    ret
+.sbn_weak:
+    lea rax, [sym_weak]
+    ret
+.sbn_unique:
+    lea rax, [sym_unique]
+    ret
+
+symbol_visibility_name:
+    cmp eax, 0
+    je .svn_default
+    cmp eax, 1
+    je .svn_internal
+    cmp eax, 2
+    je .svn_hidden
+    cmp eax, 3
+    je .svn_protected
+    lea rax, [sym_unknown]
+    ret
+.svn_default:
+    lea rax, [sym_default]
+    ret
+.svn_internal:
+    lea rax, [sym_internal]
+    ret
+.svn_hidden:
+    lea rax, [sym_hidden]
+    ret
+.svn_protected:
+    lea rax, [sym_protected]
+    ret
+
+; ---------------------------------------------------------------------------
 ; print_needed - list DT_NEEDED entries from the .dynamic section.
 ;   uses [dyn_off]/[dyn_size]; dynstr must already be loaded.
 ; ---------------------------------------------------------------------------
@@ -2609,6 +3163,8 @@ print_json:
     call json_phdrs
     PRINT j_comma
     call json_shdrs
+    PRINT j_comma
+    call json_symbol_tables
     PRINT j_comma
     call json_validation
     PRINT j_comma
