@@ -327,6 +327,21 @@ __attribute__((noinline)) int elfcheck_other(int value) {
     __asm__ volatile ("ud2");
     return value * 31;
 }
+__attribute__((noinline)) void elfcheck_sse_copy(float *destination, const float *source) {
+    __asm__ volatile (
+        "movups (%1), %%xmm0\n\t"
+        "movups %%xmm0, (%0)\n\t"
+        "movaps (%1), %%xmm1\n\t"
+        "movaps %%xmm1, (%0)\n\t"
+        "xorps %%xmm1, %%xmm0\n\t"
+        "addps %%xmm1, %%xmm0\n\t"
+        "movss (%1), %%xmm2\n\t"
+        "movsd (%1), %%xmm3\n\t"
+        "movupd (%1), %%xmm4\n\t"
+        "xorpd %%xmm4, %%xmm3"
+        : : "r"(destination), "r"(source)
+        : "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "memory");
+}
 int main(void) { return elfcheck_target(1) + elfcheck_other(2); }
 EOF
     if gcc -g -O0 -fno-inline -o "$TMP/functions.elf" "$TMP/functions.c" 2>/dev/null; then
@@ -337,7 +352,18 @@ EOF
 
         out="$("$BIN" "$TMP/functions.elf" --function elfcheck_other 2>&1)"; code=$?
         check "--function works after the path" 0 "$code" "Disassembly of function elfcheck_other in section .text:" "$out"
-        check "other function range includes its UD2 instruction" 0 "$code" ".byte 0x0f" "$out"
+        check "other function range decodes UD2" 0 "$code" "ud2" "$out"
+
+        out="$("$BIN" --function elfcheck_sse_copy "$TMP/functions.elf" 2>&1)"; code=$?
+        check "SSE decoder prints XMM registers" 0 "$code" "xmm0" "$out"
+        check "SSE decoder formats packed memory operands" 0 "$code" "xmmword [" "$out"
+        check "SSE decoder handles aligned moves" 0 "$code" "movaps" "$out"
+        check "SSE decoder handles unaligned moves" 0 "$code" "movups" "$out"
+        check "SSE decoder handles scalar move widths" 0 "$code" "movss" "$out"
+        check "SSE decoder handles double scalar move" 0 "$code" "movsd" "$out"
+        check "SSE decoder handles packed arithmetic" 0 "$code" "addps" "$out"
+        check "SSE decoder selects 66-prefix variants" 0 "$code" "movupd" "$out"
+        check "SSE decoder handles packed double operation" 0 "$code" "xorpd" "$out"
 
         out="$("$BIN" --function elfcheck_missing "$TMP/functions.elf" 2>&1)"; code=$?
         check "missing function reports an error" 1 "$code" "function not found: elfcheck_missing" "$out"

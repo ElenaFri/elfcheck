@@ -36,7 +36,7 @@ A lightweight ELF64 inspector for Linux x86-64, written in NASM. It parses heade
 On Debian/Ubuntu:
 
 ```bash
-sudo apt-get install nasm binutils make gcc python3
+sudo apt install nasm binutils make gcc python3
 ```
 
 ## Build
@@ -65,8 +65,9 @@ report (pipe through `jq` to pretty-print):
 ```
 
 Disassemble the executable `.text` section (Intel syntax, with addresses and raw
-opcodes). The decoder covers the common x86-64 integer instruction set; SSE/AVX
-and other unhandled encodings are shown as `.byte` fallbacks:
+opcodes). The decoder covers common x86-64 integer instructions and selected SSE
+operations. AVX and other unknown opcode bytes fall back to `.byte` one at a time,
+so instruction boundaries may be lost after an unsupported encoding:
 
 ```bash
 ./elfcheck --disasm <file>   # or: ./elfcheck -d <file>

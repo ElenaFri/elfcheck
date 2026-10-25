@@ -614,12 +614,13 @@ section .rodata
     dis_cl:         db "cl", 0
     name_text:      db ".text", 0
 
-    ; size keywords indexed by log2(size): 0->byte 1->word 2->dword 3->qword
+    ; memory-size keywords indexed by operand byte size.
     sz_byte:        db "byte ", 0
     sz_word:        db "word ", 0
     sz_dword:       db "dword ", 0
     sz_qword:       db "qword ", 0
-    sz_tbl:         dq sz_byte, sz_word, sz_dword, sz_qword
+    sz_xmmword:     db "xmmword ", 0
+    sz_tbl:         dq sz_byte, sz_word, sz_dword, sz_qword, sz_xmmword
 
     ; general-purpose register names
     r64_0:  db "rax",0
@@ -678,6 +679,25 @@ section .rodata
     r16_15: db "r15w",0
     regs16: dq r16_0,r16_1,r16_2,r16_3,r16_4,r16_5,r16_6,r16_7
             dq r16_8,r16_9,r16_10,r16_11,r16_12,r16_13,r16_14,r16_15
+
+    xmm_0:  db "xmm0",0
+    xmm_1:  db "xmm1",0
+    xmm_2:  db "xmm2",0
+    xmm_3:  db "xmm3",0
+    xmm_4:  db "xmm4",0
+    xmm_5:  db "xmm5",0
+    xmm_6:  db "xmm6",0
+    xmm_7:  db "xmm7",0
+    xmm_8:  db "xmm8",0
+    xmm_9:  db "xmm9",0
+    xmm_10: db "xmm10",0
+    xmm_11: db "xmm11",0
+    xmm_12: db "xmm12",0
+    xmm_13: db "xmm13",0
+    xmm_14: db "xmm14",0
+    xmm_15: db "xmm15",0
+    regs_xmm: dq xmm_0,xmm_1,xmm_2,xmm_3,xmm_4,xmm_5,xmm_6,xmm_7
+              dq xmm_8,xmm_9,xmm_10,xmm_11,xmm_12,xmm_13,xmm_14,xmm_15
 
     r8_0:   db "al",0
     r8_1:   db "cl",0
@@ -750,6 +770,37 @@ section .rodata
     mn_sar:  db "sar",0
     mn_cpuid:db "cpuid",0
     mn_endbr64: db "endbr64",0
+    mn_ud2:  db "ud2",0
+    mn_movups: db "movups",0
+    mn_movupd: db "movupd",0
+    mn_movss: db "movss",0
+    mn_movsd: db "movsd",0
+    mn_movaps: db "movaps",0
+    mn_movapd: db "movapd",0
+    mn_andps: db "andps",0
+    mn_andpd: db "andpd",0
+    mn_andnps: db "andnps",0
+    mn_andnpd: db "andnpd",0
+    mn_orps: db "orps",0
+    mn_orpd: db "orpd",0
+    mn_xorps: db "xorps",0
+    mn_xorpd: db "xorpd",0
+    mn_addps: db "addps",0
+    mn_addpd: db "addpd",0
+    mn_mulps: db "mulps",0
+    mn_mulpd: db "mulpd",0
+    mn_subps: db "subps",0
+    mn_subpd: db "subpd",0
+    mn_minps: db "minps",0
+    mn_minpd: db "minpd",0
+    mn_divps: db "divps",0
+    mn_divpd: db "divpd",0
+    mn_maxps: db "maxps",0
+    mn_maxpd: db "maxpd",0
+    sse_ps_tbl: dq mn_andps,mn_andnps,mn_orps,mn_xorps,mn_addps,mn_mulps,0,0
+                dq mn_subps,mn_minps,mn_divps,mn_maxps
+    sse_pd_tbl: dq mn_andpd,mn_andnpd,mn_orpd,mn_xorpd,mn_addpd,mn_mulpd,0,0
+                dq mn_subpd,mn_minpd,mn_divpd,mn_maxpd
     mn_hlt:  db "hlt",0
     ; string-operation base names (indexed 0-4), size suffix + rep prefix
     ; are appended at decode time into strmnem
@@ -950,6 +1001,8 @@ section .bss
     d_op:           resb 1             ; primary opcode byte
     d_style:        resb 1             ; operand rendering style (0xff = unknown)
     d_srcsz:        resb 1             ; source size for movzx/movsx
+    d_vec:          resb 1             ; 1 = XMM register operands
+    d_vec_size:     resb 1             ; XMM memory operand width in bytes
     d_trunc:        resb 1             ; ran off the end mid-instruction
     first_printed:  resb 1             ; helper for memory-operand rendering
     d_disp:         resq 1             ; sign-extended displacement
@@ -5447,8 +5500,10 @@ reset_decode_state:
     rep stosb
     ret
 
-; cur_opnd_size - out: cl = operand size in bytes (1,2,4,8)
+; cur_opnd_size - out: cl = operand size in bytes.
 cur_opnd_size:
+    cmp byte [d_vec], 1
+    je .vector
     cmp byte [d_byte], 1
     je .s1
     test byte [d_rex], 8       ; REX.W
@@ -5468,11 +5523,20 @@ cur_opnd_size:
 .s1:
     mov cl, 1
     ret
+.vector:
+    mov cl, [d_vec_size]
+    ret
 
-; emit_reg - al = index (0-15), cl = size (1,2,4,8); prints register name
+; emit_reg - al = index (0-15), cl = size; prints register name
 emit_reg:
     push rbx
     movzx ebx, al
+    cmp byte [d_vec], 1
+    jne .gpr
+    lea rax, [regs_xmm]
+    mov rsi, [rax + rbx*8]
+    jmp .out
+.gpr:
     cmp cl, 8
     je .q
     cmp cl, 4
@@ -5508,6 +5572,17 @@ emit_reg:
     pop rbx
     ret
 
+; emit_addr_reg - emit a GPR used as a memory base/index, even for XMM ops.
+emit_addr_reg:
+    cmp byte [d_vec], 1
+    jne .gpr
+    mov byte [d_vec], 0
+    call emit_reg
+    mov byte [d_vec], 1
+    ret
+.gpr:
+    jmp emit_reg
+
 ; emit_disp_signed - print "+0x.." or "-0x.." for [d_disp]
 emit_disp_signed:
     mov rax, [d_disp]
@@ -5541,6 +5616,8 @@ emit_rm:
     je .k1
     cmp al, 4
     je .k2
+    cmp al, 16
+    je .k4
     mov edx, 3
     jmp .kk
 .k0:
@@ -5551,6 +5628,9 @@ emit_rm:
     jmp .kk
 .k2:
     mov edx, 2
+    jmp .kk
+.k4:
+    mov edx, 4
 .kk:
     lea rax, [sz_tbl]
     mov rsi, [rax + rdx*8]
@@ -5570,7 +5650,7 @@ emit_rm:
     mov al, [d_base]
     push rcx
     mov cl, 8
-    call emit_reg
+    call emit_addr_reg
     pop rcx
     mov byte [first_printed], 1
 .aftbase:
@@ -5583,7 +5663,7 @@ emit_rm:
     mov al, [d_index]
     push rcx
     mov cl, 8
-    call emit_reg
+    call emit_addr_reg
     pop rcx
     PRINT dis_star
     movzx ecx, byte [d_scale]  ; scale = 1 << exponent
@@ -5887,6 +5967,7 @@ decode_one:
     jmp .finish
 .two:
     call fetch8
+    mov [d_op], al
     call decode_two_byte
 .finish:
     cmp byte [d_trunc], 1
@@ -6625,13 +6706,76 @@ decode_one_byte:
 
 ; decode_two_byte - in: al = second opcode byte (after 0x0F).
 decode_two_byte:
+    cmp al, 0x0b                     ; ud2
+    jne .t10
+    lea rsi, [mn_ud2]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_NONE
+    ret
+.t10:
+    cmp al, 0x10                     ; movups/movupd/movss/movsd xmm, xmm/mem
+    jne .t11
+    mov byte [d_style], ST_REG_RM
+    call .set_sse_move
+    cmp byte [d_style], 0xff
+    je .tunknown
+    call parse_modrm
+    call read_disp
+    ret
+.t11:
+    cmp al, 0x11                     ; movups/movupd/movss/movsd xmm/mem, xmm
+    jne .t28
+    mov byte [d_style], ST_RM_REG
+    call .set_sse_move
+    cmp byte [d_style], 0xff
+    je .tunknown
+    call parse_modrm
+    call read_disp
+    ret
+.t28:
+    cmp al, 0x28                     ; movaps/movapd xmm, xmm/mem
+    jne .t29
+    mov byte [d_style], ST_REG_RM
+    call .set_sse_aligned_move
+    cmp byte [d_style], 0xff
+    je .tunknown
+    call parse_modrm
+    call read_disp
+    ret
+.t29:
+    cmp al, 0x29                     ; movaps/movapd xmm/mem, xmm
+    jne .tsse_packed_check
+    mov byte [d_style], ST_RM_REG
+    call .set_sse_aligned_move
+    cmp byte [d_style], 0xff
+    je .tunknown
+    call parse_modrm
+    call read_disp
+    ret
+.tsse_packed_check:
+    cmp al, 0x54
+    jb .t1e
+    cmp al, 0x59
+    jbe .tsse_packed
+    cmp al, 0x5c
+    jb .t1e
+    cmp al, 0x5f
+    ja .t1e
+.tsse_packed:
+    call .set_sse_packed
+    cmp byte [d_style], 0xff
+    je .tunknown
+    call parse_modrm
+    call read_disp
+    ret
+.t1e:
     cmp al, 0x05                     ; syscall
-    jne .t1e
+    jne .t1e_next
     lea rsi, [mn_syscall]
     mov [d_mnem], rsi
     mov byte [d_style], ST_NONE
     ret
-.t1e:
+.t1e_next:
     cmp al, 0x1e                     ; endbr64 / endbr32 / nop r/m
     jne .t1f
     mov byte [d_style], ST_NONE
@@ -6751,6 +6895,84 @@ decode_two_byte:
     call read_disp
     ret
 .tunknown:
+    mov byte [d_style], 0xff
+    ret
+
+.set_sse_move:
+    mov byte [d_vec], 1
+    mov byte [d_vec_size], 16
+    cmp byte [d_repne], 1
+    je .ssm_sd
+    cmp byte [d_rep], 1
+    je .ssm_ss
+    cmp byte [d_opsize], 1
+    je .ssm_upd
+    lea rsi, [mn_movups]
+    mov [d_mnem], rsi
+    ret
+.ssm_upd:
+    lea rsi, [mn_movupd]
+    mov [d_mnem], rsi
+    ret
+.ssm_ss:
+    cmp byte [d_opsize], 0
+    jne .ssm_bad
+    mov byte [d_vec_size], 4
+    lea rsi, [mn_movss]
+    mov [d_mnem], rsi
+    ret
+.ssm_sd:
+    cmp byte [d_opsize], 0
+    jne .ssm_bad
+    mov byte [d_vec_size], 8
+    lea rsi, [mn_movsd]
+    mov [d_mnem], rsi
+    ret
+.ssm_bad:
+    mov byte [d_style], 0xff
+    ret
+
+.set_sse_aligned_move:
+    cmp byte [d_repne], 0
+    jne .ssam_bad
+    cmp byte [d_rep], 0
+    jne .ssam_bad
+    mov byte [d_vec], 1
+    mov byte [d_vec_size], 16
+    cmp byte [d_opsize], 1
+    je .ssam_pd
+    lea rsi, [mn_movaps]
+    mov [d_mnem], rsi
+    ret
+.ssam_pd:
+    lea rsi, [mn_movapd]
+    mov [d_mnem], rsi
+    ret
+.ssam_bad:
+    mov byte [d_style], 0xff
+    ret
+
+.set_sse_packed:
+    cmp byte [d_repne], 0
+    jne .ssp_bad
+    cmp byte [d_rep], 0
+    jne .ssp_bad
+    mov byte [d_vec], 1
+    mov byte [d_vec_size], 16
+    movzx ecx, byte [d_op]
+    sub ecx, 0x54
+    lea rax, [sse_ps_tbl]
+    cmp byte [d_opsize], 1
+    jne .ssp_lookup
+    lea rax, [sse_pd_tbl]
+.ssp_lookup:
+    mov rsi, [rax + rcx*8]
+    test rsi, rsi
+    jz .ssp_bad
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_REG_RM
+    ret
+.ssp_bad:
     mov byte [d_style], 0xff
     ret
 
