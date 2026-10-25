@@ -29,13 +29,14 @@ A lightweight ELF64 inspector for Linux x86-64, written in NASM. It parses heade
 
 - Linux x86-64
 - NASM
-- GNU Binutils (`ld`)
+- GNU Binutils (`ld` and `strip`)
 - GNU Make
+- GCC and Python 3 for the full test suite
 
 On Debian/Ubuntu:
 
 ```bash
-sudo apt-get install nasm binutils make
+sudo apt-get install nasm binutils make gcc python3
 ```
 
 ## Build

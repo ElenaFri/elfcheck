@@ -18,20 +18,19 @@ BUILD_DIR := build
 SRCS := $(wildcard $(SRC_DIR)/*.asm)
 OBJS := $(patsubst $(SRC_DIR)/%.asm,$(BUILD_DIR)/%.o,$(SRCS))
 
-# -Wall keeps real diagnostics; the reloc-rel warnings are suppressed because
-# cross-section RIP-relative references (.text -> .rodata/.bss) are expected
-# and harmless for a normal (non-PIE) static executable.
-NASMFLAGS := -f elf64 -g -F dwarf -Wall -w-reloc-rel-dword
-LDFLAGS   := -nostdlib
+# Keep -Wall; suppress only the expected cross-section relative dword references
+# and absolute qword pointers in dispatch tables used by the non-PIE binary.
+NASMFLAGS ?= -f elf64 -g -F dwarf -Wall -w-reloc-rel-dword -w-reloc-abs-qword
+LDFLAGS   ?= -nostdlib -no-pie
 
 .PHONY: all run test clean
 
 all: $(TARGET)
 
-$(TARGET): $(OBJS)
-	$(LD) $(LDFLAGS) -o $@ $^
+$(TARGET): $(OBJS) Makefile
+	$(LD) $(LDFLAGS) -o $@ $(OBJS)
 
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.asm | $(BUILD_DIR)
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.asm Makefile | $(BUILD_DIR)
 	$(NASM) $(NASMFLAGS) -o $@ $<
 
 $(BUILD_DIR):
