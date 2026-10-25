@@ -1,6 +1,6 @@
 # elfcheck
 
-A lightweight ELF64 binary inspector for Linux x86-64, written in NASM assembly. Parses executable headers, segments and sections, disassembles machine code, resolves dynamic dependencies, and reports structural and security (hardening) issues — with optional JSON output. No libc; direct syscalls only.
+A lightweight ELF64 inspector for Linux x86-64, written in NASM. It parses headers, segments, sections, symbol and relocation tables; disassembles machine code; and reports dynamic dependencies, structural issues and hardening. Optional JSON output; no libc, direct syscalls only.
 
 ## Features
 
@@ -14,6 +14,7 @@ A lightweight ELF64 binary inspector for Linux x86-64, written in NASM assembly.
 - [x] Detect malformed or truncated ELF files
 - [x] Report structural inconsistencies
 - [x] Export analysis results as JSON
+- [x] Filter report sections from the CLI
 - [x] Add automated tests with valid and malformed ELF files
 - [x] Disassemble machine code sections
 - [x] Display assembly instructions with addresses and opcodes
