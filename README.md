@@ -16,7 +16,7 @@ A lightweight ELF64 inspector for Linux x86-64, written in NASM. It parses heade
 - [x] Export analysis results as JSON
 - [x] Filter report sections from the CLI
 - [x] Add automated tests with valid and malformed ELF files
-- [x] Disassemble machine code sections
+- [x] Disassemble machine code sections or selected functions
 - [x] Display assembly instructions with addresses and opcodes
 - [x] Detect potentially suspicious ELF properties
 - [x] Check segment permissions and executable stack settings
@@ -70,6 +70,7 @@ and other unhandled encodings are shown as `.byte` fallbacks:
 
 ```bash
 ./elfcheck --disasm <file>   # or: ./elfcheck -d <file>
+./elfcheck --function main <file>  # only a sized function from .symtab/.dynsym
 ```
 
 The disassembly can be long; pipe it through a pager or the usual filters:

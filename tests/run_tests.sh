@@ -317,6 +317,84 @@ check "-d alias works"                    0 "$code" "Disassembly of section .tex
 out="$("$BIN" "$BIN" -d 2>&1)"; code=$?
 check "-d accepted after path"            0 "$code" "Disassembly of section .text:" "$out"
 
+# --function narrows disassembly to a bounded STT_FUNC symbol
+out="$("$BIN" --function 2>&1)"; code=$?
+check "--function requires a name and file" 1 "$code" "Usage:" "$out"
+if command -v gcc >/dev/null 2>&1; then
+    cat > "$TMP/functions.c" <<'EOF'
+__attribute__((noinline)) int elfcheck_target(int value) { return value + 7; }
+__attribute__((noinline)) int elfcheck_other(int value) {
+    __asm__ volatile ("ud2");
+    return value * 31;
+}
+int main(void) { return elfcheck_target(1) + elfcheck_other(2); }
+EOF
+    if gcc -g -O0 -fno-inline -o "$TMP/functions.elf" "$TMP/functions.c" 2>/dev/null; then
+        out="$("$BIN" --function elfcheck_target "$TMP/functions.elf" 2>&1)"; code=$?
+        check "--function selects a named function" 0 "$code" "Disassembly of function elfcheck_target in section .text:" "$out"
+        check_absent "target disassembly excludes other function bytes" 0 "$code" ".byte 0x0f" "$out"
+        check_absent "target disassembly omits whole-section title" 0 "$code" "Disassembly of section .text:" "$out"
+
+        out="$("$BIN" "$TMP/functions.elf" --function elfcheck_other 2>&1)"; code=$?
+        check "--function works after the path" 0 "$code" "Disassembly of function elfcheck_other in section .text:" "$out"
+        check "other function range includes its UD2 instruction" 0 "$code" ".byte 0x0f" "$out"
+
+        out="$("$BIN" --function elfcheck_missing "$TMP/functions.elf" 2>&1)"; code=$?
+        check "missing function reports an error" 1 "$code" "function not found: elfcheck_missing" "$out"
+
+        if command -v python3 >/dev/null 2>&1; then
+            cp "$TMP/functions.elf" "$TMP/functions.zero-size.elf"
+            python3 - "$TMP/functions.zero-size.elf" <<'PY'
+import struct, sys
+path = sys.argv[1]
+data = bytearray(open(path, 'rb').read())
+shoff = struct.unpack_from('<Q', data, 40)[0]
+shentsize = struct.unpack_from('<H', data, 58)[0]
+shnum = struct.unpack_from('<H', data, 60)[0]
+found = False
+for index in range(shnum):
+    sh = shoff + index * shentsize
+    section_type = struct.unpack_from('<I', data, sh + 4)[0]
+    if section_type not in (2, 11):
+        continue
+    offset, size = struct.unpack_from('<QQ', data, sh + 24)
+    link = struct.unpack_from('<I', data, sh + 40)[0]
+    entsize = struct.unpack_from('<Q', data, sh + 56)[0]
+    str_sh = shoff + link * shentsize
+    str_off, str_size = struct.unpack_from('<QQ', data, str_sh + 24)
+    strings = data[str_off:str_off + str_size]
+    for symbol in range(offset, offset + size, entsize):
+        name_off = struct.unpack_from('<I', data, symbol)[0]
+        info = data[symbol + 4]
+        if name_off < len(strings) and (info & 0x0f) == 2:
+            name = strings[name_off:].split(bytes([0]), 1)[0]
+            if name == b'elfcheck_target':
+                struct.pack_into('<Q', data, symbol + 16, 0)
+                found = True
+                break
+    if found:
+        break
+if not found:
+    raise SystemExit('fixture function symbol not found')
+open(path, 'wb').write(data)
+PY
+            out="$("$BIN" --function elfcheck_target "$TMP/functions.zero-size.elf" 2>&1)"; code=$?
+            check "zero-sized function is rejected" 1 "$code" "no usable executable range: elfcheck_target" "$out"
+        fi
+
+        if gcc -g -O0 -fno-inline -c -o "$TMP/functions.o" "$TMP/functions.c" 2>/dev/null; then
+            out="$("$BIN" --function elfcheck_target "$TMP/functions.o" 2>&1)"; code=$?
+            check "--function resolves ET_REL section-relative values" 0 "$code" "Disassembly of function elfcheck_target in section .text:" "$out"
+            check_absent "ET_REL target excludes other function bytes" 0 "$code" ".byte 0x0f" "$out"
+        fi
+
+        if gcc -no-pie -g -O0 -fno-inline -o "$TMP/functions.exec" "$TMP/functions.c" 2>/dev/null; then
+            out="$("$BIN" --function elfcheck_target "$TMP/functions.exec" 2>&1)"; code=$?
+            check "--function resolves ET_EXEC virtual addresses" 0 "$code" "Disassembly of function elfcheck_target in section .text:" "$out"
+        fi
+    fi
+fi
+
 # 11. Security analysis (segment permissions + stack executability)
 out="$("$BIN" "$BIN" 2>&1)"; code=$?
 check "security section present"          0 "$code" "Security:" "$out"
@@ -478,6 +556,7 @@ out="$("$BIN" --help 2>&1)"; code=$?
 check "--help prints usage, exit 0"       0 "$code" "Usage:" "$out"
 check "--help documents --symbols"       0 "$code" "--symbols" "$out"
 check "--help documents --relocs"        0 "$code" "--relocs" "$out"
+check "--help documents --function"      0 "$code" "--function <name>" "$out"
 out="$("$BIN" -h 2>&1)"; code=$?
 check "-h alias prints usage, exit 0"     0 "$code" "Usage:" "$out"
 

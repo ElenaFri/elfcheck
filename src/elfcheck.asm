@@ -65,6 +65,7 @@
 %define PF_R        4
 
 ; ---- e_type values and dynamic-section tags (for the hardening report) ----
+%define ET_REL       1
 %define ET_EXEC      2
 %define ET_DYN       3
 %define DT_RPATH     15
@@ -189,7 +190,7 @@ section .rodata
     elf_magic:      db 0x7f, 'E', 'L', 'F'
 
     usage_msg:      db "Usage: elfcheck [options] <file>", 10
-                    db "  Output modes:   --json   --disasm | -d", 10
+                    db "  Output modes:   --json   --disasm | -d   --function <name>", 10
                     db "  Section filters: --header --segments --sections --validate", 10
                     db "                   --security --dynamic --hardening --symbols", 10
                     db "                   --relocs (default report; tables are opt-in)", 10
@@ -589,9 +590,13 @@ section .rodata
 
     ; ---- disassembler literals ----
     dis_title:      db 10, "Disassembly of section ", 0
+    dis_function_title: db 10, "Disassembly of function ", 0
+    dis_function_section: db " in section ", 0
     dis_colon_nl:   db ":", 10, 0
     dis_nosect:     db "elfcheck: no executable .text section to disassemble", 10
     dis_nosect_len: equ $ - dis_nosect
+    func_err_not_found: db "elfcheck: function not found: ", 0
+    func_err_no_range: db "elfcheck: function has no usable executable range: ", 0
     dis_trunc_note: db "  ... (section larger than buffer; output truncated)", 10, 0
     dis_colon:      db ":", 0
     dis_space:      db " ", 0
@@ -807,6 +812,7 @@ section .rodata
 
     opt_disasm:     db "--disasm", 0
     opt_disasm_s:   db "-d", 0
+    opt_function:   db "--function", 0
 
 section .bss
     ehdr:           resb EHDR_SIZE     ; full ELF header
@@ -846,9 +852,11 @@ section .bss
     shflagbuf:      resb 16            ; section flag letters + NUL
     nread:          resq 1             ; bytes actually read
     numbuf:         resb 32            ; scratch for number formatting
-    json_mode:      resb 1             ; 1 = emit JSON instead of text
-    disasm_mode:    resb 1             ; 1 = disassemble .text instead of report
+    json_mode:      resb 1             ; 1 = emit JSON instead of report
+    disasm_mode:    resb 1             ; 1 = disassemble machine code
     help_mode:      resb 1             ; 1 = --help/-h given
+    disasm_error:   resb 1             ; 1 = targeted disassembly failed
+    function_name:  resq 1             ; requested function name, or 0
     filter_mask:    resd 1             ; selected section bits (0 = use default sections)
     eff_mask:       resd 1             ; effective mask used while printing
     silent:         resb 1             ; 1 = validate_structure suppresses output
@@ -954,6 +962,20 @@ section .bss
     sel_size:       resq 1             ; its size in bytes
     sel_addr:       resq 1             ; its virtual address
     sel_name:       resq 1             ; pointer to its name
+    func_table_type: resd 1
+    func_table_offset: resq 1
+    func_table_size: resq 1
+    func_table_entsize: resq 1
+    func_table_link: resd 1
+    func_table_current: resq 1
+    func_table_count: resq 1
+    func_symbol_seen: resb 1
+    func_symbol_found: resb 1
+    func_symbol_shndx: resd 1
+    func_symbol_value: resq 1
+    func_symbol_size: resq 1
+    func_section_size: resq 1
+    func_delta: resq 1
 
 section .text
     global _start
@@ -966,6 +988,8 @@ _start:
     mov byte [json_mode], 0
     mov byte [disasm_mode], 0
     mov byte [help_mode], 0
+    mov byte [disasm_error], 0
+    mov qword [function_name], 0
     mov dword [filter_mask], 0
     mov rcx, 1               ; i = 1 (skip argv[0])
 .arg_loop:
@@ -976,6 +1000,23 @@ _start:
     MODEARG opt_disasm_s, disasm_mode
     MODEARG opt_help,     help_mode
     MODEARG opt_help_s,   help_mode
+    mov rsi, [r9 + rcx*8]
+    lea rdi, [opt_function]
+    call streq
+    test al, al
+    jz .not_function_arg
+    cmp qword [function_name], 0
+    jne .usage
+    inc rcx
+    cmp rcx, r8
+    jae .usage
+    mov rax, [r9 + rcx*8]
+    test rax, rax
+    jz .usage
+    mov [function_name], rax
+    mov byte [disasm_mode], 1
+    jmp .arg_next
+.not_function_arg:
     FILTARG opt_header,    FILT_HEADER
     FILTARG opt_segments,  FILT_SEGMENTS
     FILTARG opt_sections,  FILT_SECTIONS
@@ -1093,9 +1134,14 @@ _start:
     mov rax, SYS_CLOSE
     syscall
     xor edi, edi            ; exit 0 if no structural issues...
+    cmp byte [disasm_error], 0
+    jne .disasm_failed
     cmp qword [issues], 0
     je .exit
     mov edi, 2              ; ...else exit 2
+    jmp .exit
+.disasm_failed:
+    mov edi, 1
     jmp .exit
 
 .invalid:
@@ -4752,6 +4798,266 @@ nibble_hex:
 ; a single ".byte 0x.." so decoding always makes forward progress.
 ; ===========================================================================
 
+; find_function_symbol - search SHT_SYMTAB first, then SHT_DYNSYM.
+; Stores the first defined STT_FUNC matching [function_name].
+find_function_symbol:
+    push r13
+    push r14
+    mov rdi, r12
+    xor esi, esi
+    mov edx, SEEK_END
+    mov eax, SYS_LSEEK
+    syscall
+    test rax, rax
+    js .file_size_failed
+    mov [filesize], rax
+    mov byte [func_symbol_seen], 0
+    mov byte [func_symbol_found], 0
+    mov dword [func_table_type], 2       ; SHT_SYMTAB
+    call .scan_type
+    cmp byte [func_symbol_found], 0
+    jne .done
+    mov dword [func_table_type], 11      ; SHT_DYNSYM
+    call .scan_type
+.done:
+    movzx eax, byte [func_symbol_found]
+    pop r14
+    pop r13
+    ret
+.file_size_failed:
+    mov byte [func_symbol_seen], 0
+    mov byte [func_symbol_found], 0
+    xor eax, eax
+    pop r14
+    pop r13
+    ret
+
+.scan_type:
+    movzx r14d, word [ehdr + E_SHNUM]
+    xor r13d, r13d
+.section_loop:
+    cmp r13, r14
+    jae .type_done
+    movzx eax, word [ehdr + E_SHENTSIZE]
+    cmp eax, SHDR_SIZE
+    jb .type_done
+    imul rax, r13
+    jo .type_done
+    add rax, [ehdr + E_SHOFF]
+    jc .type_done
+    mov rdi, r12
+    mov rsi, rax
+    xor edx, edx
+    mov eax, SYS_LSEEK
+    syscall
+    test rax, rax
+    js .type_done
+    mov rdi, r12
+    lea rsi, [shdr]
+    mov edx, SHDR_SIZE
+    mov eax, SYS_READ
+    syscall
+    cmp rax, SHDR_SIZE
+    jne .type_done
+    mov eax, [func_table_type]
+    cmp dword [shdr + SH_TYPE], eax
+    jne .section_next
+    mov rax, [shdr + SH_OFFSET]
+    mov [func_table_offset], rax
+    mov rax, [shdr + SH_SIZE]
+    mov [func_table_size], rax
+    mov rax, [shdr + SH_ENTSIZE]
+    mov [func_table_entsize], rax
+    mov eax, [shdr + SH_LINK]
+    mov [func_table_link], eax
+    call .scan_table
+    cmp byte [func_symbol_found], 0
+    jne .type_done
+.section_next:
+    inc r13
+    jmp .section_loop
+.type_done:
+    ret
+
+.scan_table:
+    cmp qword [func_table_entsize], 24
+    jb .table_done
+    cmp qword [func_table_size], 0
+    je .table_done
+    mov rax, [func_table_offset]
+    add rax, [func_table_size]
+    jc .table_done
+    cmp rax, [filesize]
+    ja .table_done
+    mov rax, [func_table_size]
+    xor edx, edx
+    div qword [func_table_entsize]
+    test rdx, rdx
+    jnz .table_done
+    mov [func_table_count], rax
+    mov eax, [func_table_link]
+    test eax, eax
+    jz .table_done
+    movzx ecx, word [ehdr + E_SHNUM]
+    cmp eax, ecx
+    jae .table_done
+    mov qword [dynstr_len], 0
+    call load_dynstr
+    cmp dword [shdr + SH_TYPE], 3 ; SHT_STRTAB
+    jne .table_done
+    cmp qword [dynstr_len], 0
+    je .table_done
+    mov rax, [func_table_offset]
+    mov [func_table_current], rax
+.symbol_loop:
+    cmp qword [func_table_count], 0
+    je .table_done
+    mov rdi, r12
+    mov rsi, [func_table_current]
+    xor edx, edx
+    mov eax, SYS_LSEEK
+    syscall
+    test rax, rax
+    js .table_done
+    mov rdi, r12
+    lea rsi, [syment]
+    mov edx, 24
+    mov eax, SYS_READ
+    syscall
+    cmp rax, 24
+    jne .table_done
+    mov eax, [syment]
+    cmp rax, [dynstr_len]
+    jae .symbol_next
+    call dynstr_name_ptr
+    mov rdi, [function_name]
+    call streq
+    test al, al
+    jz .symbol_next
+    mov al, [syment + 4]
+    and al, 0x0f
+    cmp al, 2                       ; STT_FUNC
+    jne .symbol_next
+    mov byte [func_symbol_seen], 1
+    movzx eax, word [syment + 6]    ; st_shndx
+    test eax, eax                   ; skip undefined imports
+    jz .symbol_next
+    mov [func_symbol_shndx], eax
+    mov rax, [syment + 8]
+    mov [func_symbol_value], rax
+    mov rax, [syment + 16]
+    mov [func_symbol_size], rax
+    mov byte [func_symbol_found], 1
+    jmp .table_done
+.symbol_next:
+    mov rax, [func_table_current]
+    add rax, [func_table_entsize]
+    jc .table_done
+    mov [func_table_current], rax
+    dec qword [func_table_count]
+    jmp .symbol_loop
+.table_done:
+    ret
+
+; select_function_range - turn the matching symbol into a bounded file range.
+;   out: eax = 1 on success, 0 if the symbol cannot be safely disassembled.
+select_function_range:
+    call find_function_symbol
+    test eax, eax
+    jz .sfr_bad
+    cmp qword [func_symbol_size], 0
+    je .sfr_bad
+    mov eax, [func_symbol_shndx]
+    movzx ecx, word [ehdr + E_SHNUM]
+    cmp eax, ecx
+    jae .sfr_bad
+    movzx ecx, word [ehdr + E_SHENTSIZE]
+    cmp ecx, SHDR_SIZE
+    jb .sfr_bad
+    imul rax, rcx
+    jo .sfr_bad
+    add rax, [ehdr + E_SHOFF]
+    jc .sfr_bad
+    mov rdi, r12
+    mov rsi, rax
+    xor edx, edx
+    mov eax, SYS_LSEEK
+    syscall
+    test rax, rax
+    js .sfr_bad
+    mov rdi, r12
+    lea rsi, [shdr]
+    mov edx, SHDR_SIZE
+    mov eax, SYS_READ
+    syscall
+    cmp rax, SHDR_SIZE
+    jne .sfr_bad
+    cmp dword [shdr + SH_TYPE], 1 ; SHT_PROGBITS
+    jne .sfr_bad
+    test qword [shdr + SH_FLAGS], SHF_EXECINSTR
+    jz .sfr_bad
+    call section_name_ptr
+    mov [sel_name], rsi
+    mov rax, [shdr + SH_SIZE]
+    mov [func_section_size], rax
+    mov rax, [shdr + SH_OFFSET]
+    mov [sel_off], rax
+    add rax, [func_section_size]
+    jc .sfr_bad
+    cmp rax, [filesize]
+    ja .sfr_bad
+    movzx eax, word [ehdr + E_TYPE]
+    cmp eax, ET_REL
+    je .sfr_relocatable
+    cmp eax, ET_EXEC
+    je .sfr_address
+    cmp eax, ET_DYN
+    jne .sfr_bad
+.sfr_address:
+    mov rax, [func_symbol_value]
+    cmp rax, [shdr + SH_ADDR]
+    jb .sfr_bad
+    sub rax, [shdr + SH_ADDR]
+    mov [func_delta], rax
+    mov rax, [func_symbol_value]
+    mov [sel_addr], rax
+    jmp .sfr_check_bounds
+.sfr_relocatable:
+    mov rax, [func_symbol_value]
+    mov [func_delta], rax
+    add rax, [shdr + SH_ADDR]
+    jc .sfr_bad
+    mov [sel_addr], rax
+.sfr_check_bounds:
+    mov rax, [func_delta]
+    add rax, [func_symbol_size]
+    jc .sfr_bad
+    cmp rax, [func_section_size]
+    ja .sfr_bad
+    mov rax, [sel_off]
+    add rax, [func_delta]
+    jc .sfr_bad
+    mov [sel_off], rax
+    mov rax, [func_symbol_size]
+    mov [sel_size], rax
+    mov eax, 1
+    ret
+.sfr_bad:
+    xor eax, eax
+    ret
+
+; print_stderr_cstr - write a NUL-terminated string to stderr.
+print_stderr_cstr:
+    xor edx, edx
+.psc_len:
+    cmp byte [rsi + rdx], 0
+    je .psc_write
+    inc rdx
+    jmp .psc_len
+.psc_write:
+    call print_stderr
+    ret
+
 ; disassemble - locate .text (PROGBITS + EXECINSTR), load it, decode & print.
 disassemble:
     mov qword [issues], 0
@@ -4759,8 +5065,14 @@ disassemble:
     mov qword [text_trunc], 0
     movzx r14d, word [ehdr + E_SHNUM]
     test r14, r14
-    jz .none
+    jnz .have_sections
+    cmp qword [function_name], 0
+    jne .function_not_found
+    jmp .none
+.have_sections:
     call load_shstrtab
+    cmp qword [function_name], 0
+    jne .select_function
     xor r13, r13
 .find_loop:
     cmp r13, r14
@@ -4814,6 +5126,32 @@ disassemble:
 .find_done:
     cmp qword [sel_off], -1
     je .none
+    jmp .load_selected
+.select_function:
+    call select_function_range
+    test eax, eax
+    jnz .load_selected
+    cmp byte [func_symbol_seen], 0
+    jne .function_range_error
+.function_not_found:
+    lea rsi, [func_err_not_found]
+    call print_stderr_cstr
+    mov rsi, [function_name]
+    call print_stderr_cstr
+    lea rsi, [nl]
+    call print_stderr_cstr
+    mov byte [disasm_error], 1
+    ret
+.function_range_error:
+    lea rsi, [func_err_no_range]
+    call print_stderr_cstr
+    mov rsi, [function_name]
+    call print_stderr_cstr
+    lea rsi, [nl]
+    call print_stderr_cstr
+    mov byte [disasm_error], 1
+    ret
+.load_selected:
     mov rax, [sel_size]                 ; clamp to TEXT_CAP
     cmp rax, TEXT_CAP
     jbe .szok
@@ -4828,18 +5166,37 @@ disassemble:
     xor edx, edx
     mov rax, SYS_LSEEK
     syscall
+    test rax, rax
+    js .selected_read_failed
     mov rdi, r12
     lea rsi, [textbuf]
     mov rdx, [text_len]
     mov rax, SYS_READ
     syscall
     test rax, rax
-    js .none
+    js .selected_read_failed
+    cmp qword [function_name], 0
+    je .read_complete
+    cmp rax, [text_len]
+    jne .function_range_error
+.read_complete:
     mov [text_len], rax
+    cmp qword [function_name], 0
+    je .print_section_title
+    PRINT dis_function_title
+    mov rsi, [function_name]
+    call print_cstr
+    PRINT dis_function_section
+    mov rsi, [sel_name]
+    call print_cstr
+    PRINT dis_colon_nl
+    jmp .title_done
+.print_section_title:
     PRINT dis_title                     ; header line
     mov rsi, [sel_name]
     call print_cstr
     PRINT dis_colon_nl
+.title_done:
     lea rax, [textbuf]                  ; set up decode loop
     mov [d_cur], rax
     add rax, [text_len]
@@ -4860,6 +5217,10 @@ disassemble:
     PRINT dis_trunc_note
 .ret:
     ret
+.selected_read_failed:
+    cmp qword [function_name], 0
+    jne .function_range_error
+    jmp .none
 .none:
     lea rsi, [dis_nosect]
     mov rdx, dis_nosect_len
