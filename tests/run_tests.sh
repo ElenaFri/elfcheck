@@ -218,7 +218,90 @@ PY
     fi
 fi
 
-# 9. Disassembler mode
+# 9. REL/RELA relocation tables
+if command -v gcc >/dev/null 2>&1; then
+    cat > "$TMP/relocs.c" <<'EOF'
+extern int elfcheck_reloc_target(int);
+int elfcheck_reloc_fixture(int value) { return elfcheck_reloc_target(value) + 3; }
+EOF
+    if gcc -c -fno-pic -o "$TMP/relocs.o" "$TMP/relocs.c" 2>/dev/null; then
+        out="$("$BIN" --relocs "$TMP/relocs.o" 2>&1)"; code=$?
+        check "--relocs exits 0 for relocatable ELF" 0 "$code" "Relocations:" "$out"
+        check "--relocs names the RELA section"       0 "$code" ".rela.text" "$out"
+        check "--relocs shows target section"         0 "$code" "target: .text" "$out"
+        check "--relocs decodes x86-64 PLT32"        0 "$code" "R_X86_64_PLT32" "$out"
+        check "--relocs resolves symbol name"         0 "$code" "elfcheck_reloc_target" "$out"
+        check "--relocs prints signed addend"         0 "$code" "-4" "$out"
+
+        out="$("$BIN" "$TMP/relocs.o" --relocs 2>&1)"; code=$?
+        check "--relocs accepted after path"           0 "$code" "Relocations:" "$out"
+
+        out="$("$BIN" --header --relocs "$TMP/relocs.o" 2>&1)"; code=$?
+        check "combined filter includes relocations" 0 "$code" "Relocations:" "$out"
+        check "combined relocation filter includes header" 0 "$code" "ELF Header:" "$out"
+        check_absent "combined relocation filter hides symbols" 0 "$code" "Symbol Tables:" "$out"
+
+        out="$("$BIN" "$TMP/relocs.o" 2>&1)"; code=$?
+        check_absent "default report keeps relocations opt-in" 0 "$code" "Relocations:" "$out"
+
+        out="$("$BIN" --json "$TMP/relocs.o" 2>&1)"; code=$?
+        check "JSON includes relocation table array" 0 "$code" '"relocation_tables":[' "$out"
+        check "JSON includes relocation type" 0 "$code" '"type":"R_X86_64_PLT32"' "$out"
+        check "JSON includes relocation symbol" 0 "$code" '"symbol_name":"elfcheck_reloc_target"' "$out"
+        check "JSON includes signed relocation addend" 0 "$code" '"addend":-4' "$out"
+        if command -v python3 >/dev/null 2>&1; then
+            printf '%s' "$out" | python3 -m json.tool >/dev/null 2>&1
+            pcode=$?
+            check "JSON with relocations parses" 0 "$pcode" "" ""
+            printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); t=next(t for t in d["relocation_tables"] if t["name"]==".rela.text"); r=t["relocations"][0]; assert t["kind"]=="RELA" and t["target_name"]==".text" and r["type_id"]==4 and r["symbol_name"]=="elfcheck_reloc_target" and r["addend"]==-4'
+            pcode=$?
+            check "JSON relocation fields match ELF record" 0 "$pcode" "" ""
+
+            cp "$TMP/relocs.o" "$TMP/rel.o"
+            python3 - "$TMP/rel.o" <<'PY'
+import struct, sys
+p = sys.argv[1]
+d = bytearray(open(p, 'rb').read())
+off = struct.unpack_from('<Q', d, 40)[0]
+es = struct.unpack_from('<H', d, 58)[0]
+n = struct.unpack_from('<H', d, 60)[0]
+for i in range(n):
+    at = off + i * es
+    if struct.unpack_from('<I', d, at + 4)[0] == 4:
+        struct.pack_into('<I', d, at + 4, 9)
+        struct.pack_into('<Q', d, at + 32, 16)
+        struct.pack_into('<Q', d, at + 56, 16)
+        break
+open(p, 'wb').write(d)
+PY
+            out="$("$BIN" --relocs "$TMP/rel.o" 2>&1)"; code=$?
+            check "SHT_REL entries are decoded" 0 "$code" "(index 2, REL, target: .text" "$out"
+            check "REL entries omit the addend" 0 "$code" "elfcheck_reloc_target" "$out"
+            out="$("$BIN" --json "$TMP/rel.o" 2>&1)"; code=$?
+            check "JSON REL addend is null" 0 "$code" '"addend":null' "$out"
+
+            cp "$TMP/relocs.o" "$TMP/bad-relocs.o"
+            python3 - "$TMP/bad-relocs.o" <<'PY'
+import struct, sys
+p = sys.argv[1]
+d = bytearray(open(p, 'rb').read())
+off = struct.unpack_from('<Q', d, 40)[0]
+es = struct.unpack_from('<H', d, 58)[0]
+n = struct.unpack_from('<H', d, 60)[0]
+for i in range(n):
+    at = off + i * es
+    if struct.unpack_from('<I', d, at + 4)[0] in (4, 9):
+        struct.pack_into('<Q', d, at + 56, 0)
+        break
+open(p, 'wb').write(d)
+PY
+            out="$("$BIN" --relocs "$TMP/bad-relocs.o" 2>&1)"; code=$?
+            check "zero relocation entry size is handled safely" 0 "$code" "invalid relocation section metadata" "$out"
+        fi
+    fi
+fi
+
+# 10. Disassembler mode
 out="$("$BIN" --disasm "$BIN" 2>&1)"; code=$?
 check "--disasm exits 0 for valid ELF"   0 "$code" "Disassembly of section .text:" "$out"
 check "--disasm decodes syscall"         0 "$code" "syscall" "$out"
@@ -234,7 +317,7 @@ check "-d alias works"                    0 "$code" "Disassembly of section .tex
 out="$("$BIN" "$BIN" -d 2>&1)"; code=$?
 check "-d accepted after path"            0 "$code" "Disassembly of section .text:" "$out"
 
-# 9. Security analysis (segment permissions + stack executability)
+# 11. Security analysis (segment permissions + stack executability)
 out="$("$BIN" "$BIN" 2>&1)"; code=$?
 check "security section present"          0 "$code" "Security:" "$out"
 
@@ -318,7 +401,7 @@ if command -v gcc >/dev/null 2>&1; then
     fi
 fi
 
-# 10. Dynamic linking analysis (needed libraries + imported symbols)
+# 12. Dynamic linking analysis (needed libraries + imported symbols)
 #     Our own binary is statically linked (ld -nostdlib).
 out="$("$BIN" "$BIN" 2>&1)"; code=$?
 check "dynamic section present"           0 "$code" "Dynamic:"            "$out"
@@ -352,7 +435,7 @@ if [[ -r /bin/ls ]]; then
     fi
 fi
 
-# 11. Hardening report (checksec-style mitigation posture)
+# 13. Hardening report (checksec-style mitigation posture)
 out="$("$BIN" "$BIN" 2>&1)"; code=$?
 check "hardening section present"          0 "$code" "Hardening:"   "$out"
 check "hardening reports RELRO"           0 "$code" "RELRO:"       "$out"
@@ -390,10 +473,11 @@ if command -v gcc >/dev/null 2>&1; then
     fi
 fi
 
-# 12. CLI section filters and help
+# 14. CLI section filters and help
 out="$("$BIN" --help 2>&1)"; code=$?
 check "--help prints usage, exit 0"       0 "$code" "Usage:" "$out"
 check "--help documents --symbols"       0 "$code" "--symbols" "$out"
+check "--help documents --relocs"        0 "$code" "--relocs" "$out"
 out="$("$BIN" -h 2>&1)"; code=$?
 check "-h alias prints usage, exit 0"     0 "$code" "Usage:" "$out"
 

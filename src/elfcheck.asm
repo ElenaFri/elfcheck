@@ -84,6 +84,7 @@
 %define FILT_DYNAMIC   32
 %define FILT_HARDENING 64
 %define FILT_SYMBOLS   128
+%define FILT_RELOCS    256
 %define FILT_DEFAULT   0x7f
 
 ; ---- program header table column widths ----
@@ -104,6 +105,7 @@
 %define SH_OFFSET    24
 %define SH_SIZE      32
 %define SH_LINK      40
+%define SH_INFO      44
 %define SH_ENTSIZE   56
 %define SH_ADDRALIGN 48
 %define SHF_WRITE    0x1
@@ -178,7 +180,7 @@ default rel
     call streq
     test al, al
     jz %%skip
-    or byte [filter_mask], %2
+    or dword [filter_mask], %2
     jmp .arg_next
 %%skip:
 %endmacro
@@ -190,7 +192,7 @@ section .rodata
                     db "  Output modes:   --json   --disasm | -d", 10
                     db "  Section filters: --header --segments --sections --validate", 10
                     db "                   --security --dynamic --hardening --symbols", 10
-                    db "                   (default report; use --symbols for tables)", 10
+                    db "                   --relocs (default report; tables are opt-in)", 10
                     db "  --help | -h     show this help", 10
     usage_len:      equ $ - usage_msg
 
@@ -203,6 +205,7 @@ section .rodata
     opt_dynamic:    db "--dynamic", 0
     opt_hardening:  db "--hardening", 0
     opt_symbols:    db "--symbols", 0
+    opt_relocs:     db "--relocs", 0
     opt_help:       db "--help", 0
     opt_help_s:     db "-h", 0
 
@@ -387,6 +390,69 @@ section .rodata
     sym_protected:  db "PROTECTED", 0
     sym_unknown:    db "UNKNOWN", 0
 
+    ; ---- relocation report ----
+    rel_title:      db 10, "Relocations:", 10, 0
+    rel_none:       db "  (no relocation sections found)", 10, 0
+    rel_table_pre:  db "Relocation section '", 0
+    rel_table_mid:  db "' (index ", 0
+    rel_kind_mid:   db ", ", 0
+    rel_target_mid: db ", target: ", 0
+    rel_count_mid:  db ", ", 0
+    rel_entries_end:db " entries):", 10, 0
+    rel_target_none:db "none", 0
+    rel_colhdr:     db "  Offset             Type                              TypeID  Sym     Symbol                         Addend", 10, 0
+    rel_bad_meta:   db "  [!] invalid relocation section metadata; entries skipped", 10, 0
+    rel_bad_symtab: db "  [!] invalid or unavailable linked symbol table; names unresolved", 10, 0
+    rel_bad_strtab: db "  [!] invalid or unavailable symbol string table; names omitted", 10, 0
+    rel_no_symbol:  db "-", 0
+    rel_unresolved: db "<unresolved>", 0
+    rel_minus:      db "-", 0
+    rel_kind_rel:   db "REL", 0
+    rel_kind_rela:  db "RELA", 0
+    rel_type_unknown: db "R_X86_64_UNKNOWN", 0
+    rel_type_other: db "UNKNOWN", 0
+    rt_none:        db "R_X86_64_NONE", 0
+    rt_64:          db "R_X86_64_64", 0
+    rt_pc32:        db "R_X86_64_PC32", 0
+    rt_got32:       db "R_X86_64_GOT32", 0
+    rt_plt32:       db "R_X86_64_PLT32", 0
+    rt_copy:        db "R_X86_64_COPY", 0
+    rt_glob_dat:    db "R_X86_64_GLOB_DAT", 0
+    rt_jump_slot:   db "R_X86_64_JUMP_SLOT", 0
+    rt_relative:    db "R_X86_64_RELATIVE", 0
+    rt_gotpc_rel:   db "R_X86_64_GOTPCREL", 0
+    rt_32:          db "R_X86_64_32", 0
+    rt_32s:         db "R_X86_64_32S", 0
+    rt_16:          db "R_X86_64_16", 0
+    rt_pc16:        db "R_X86_64_PC16", 0
+    rt_8:           db "R_X86_64_8", 0
+    rt_pc8:         db "R_X86_64_PC8", 0
+    rt_dtpmod64:    db "R_X86_64_DTPMOD64", 0
+    rt_dtpoff64:    db "R_X86_64_DTPOFF64", 0
+    rt_tpoff64:     db "R_X86_64_TPOFF64", 0
+    rt_tls_gd:      db "R_X86_64_TLSGD", 0
+    rt_tls_ld:      db "R_X86_64_TLSLD", 0
+    rt_dtpoff32:   db "R_X86_64_DTPOFF32", 0
+    rt_gottpoff:    db "R_X86_64_GOTTPOFF", 0
+    rt_tpoff32:     db "R_X86_64_TPOFF32", 0
+    rt_pc64:        db "R_X86_64_PC64", 0
+    rt_gotoff64:    db "R_X86_64_GOTOFF64", 0
+    rt_gotpc32:     db "R_X86_64_GOTPC32", 0
+    rt_got64:       db "R_X86_64_GOT64", 0
+    rt_gotpcrel64:  db "R_X86_64_GOTPCREL64", 0
+    rt_gotpc64:     db "R_X86_64_GOTPC64", 0
+    rt_gotplt64:    db "R_X86_64_GOTPLT64", 0
+    rt_pltoff64:    db "R_X86_64_PLTOFF64", 0
+    rt_size32:      db "R_X86_64_SIZE32", 0
+    rt_size64:      db "R_X86_64_SIZE64", 0
+    rt_gotpc32_tlsdesc: db "R_X86_64_GOTPC32_TLSDESC", 0
+    rt_tlsdesc_call: db "R_X86_64_TLSDESC_CALL", 0
+    rt_tlsdesc:     db "R_X86_64_TLSDESC", 0
+    rt_irelative:   db "R_X86_64_IRELATIVE", 0
+    rt_relative64:  db "R_X86_64_RELATIVE64", 0
+    rt_gotpcrelx:   db "R_X86_64_GOTPCRELX", 0
+    rt_rex_gotpcrelx: db "R_X86_64_REX_GOTPCRELX", 0
+
     ; ---- hardening report (checksec-style) ----
     hd_title:       db 10, "Hardening:", 10, 0
     hd_relro_lbl:   db "  RELRO:         ", 0
@@ -495,6 +561,15 @@ section .rodata
     jk_section_index: db 34, "section_index", 34, ":", 0
     jk_section_kind: db 34, "section_kind", 34, ":", 0
     jk_strings_valid: db 34, "string_table_valid", 34, ":", 0
+    jk_relocation_tables: db 34, "relocation_tables", 34, ":", 0
+    jk_relocations: db 34, "relocations", 34, ":", 0
+    jk_target_index: db 34, "target_index", 34, ":", 0
+    jk_target_name: db 34, "target_name", 34, ":", 0
+    jk_type_id:     db 34, "type_id", 34, ":", 0
+    jk_symbol_index: db 34, "symbol_index", 34, ":", 0
+    jk_symbol_name: db 34, "symbol_name", 34, ":", 0
+    jk_addend:      db 34, "addend", 34, ":", 0
+    jk_symbol_table_valid: db 34, "symbol_table_valid", 34, ":", 0
     jk_hardening:   db 34, "hardening", 34, ":", 0
     jk_relro:       db 34, "relro", 34, ":", 0
     jk_canary:      db 34, "stack_canary", 34, ":", 0
@@ -774,8 +849,8 @@ section .bss
     json_mode:      resb 1             ; 1 = emit JSON instead of text
     disasm_mode:    resb 1             ; 1 = disassemble .text instead of report
     help_mode:      resb 1             ; 1 = --help/-h given
-    filter_mask:    resb 1             ; selected section bits (0 = use default sections)
-    eff_mask:       resb 1             ; effective mask used while printing
+    filter_mask:    resd 1             ; selected section bits (0 = use default sections)
+    eff_mask:       resd 1             ; effective mask used while printing
     silent:         resb 1             ; 1 = validate_structure suppresses output
     jbuf:           resb 8             ; scratch for JSON byte escaping
 
@@ -795,6 +870,35 @@ section .bss
     sym_entry_count: resq 1
     sym_entry_index: resq 1
     sym_tables_found: resq 1
+
+    ; ---- relocation table state ----
+    rel_json_mode:   resb 1
+    rel_table_valid: resb 1
+    rel_symtab_valid: resb 1
+    rel_str_valid:   resb 1
+    rel_target_valid: resb 1
+    rel_table_first: resb 1
+    rel_item_first:  resb 1
+    rel_table_index: resq 1
+    rel_table_type:  resd 1
+    rel_table_name:  resq 1
+    rel_table_offset: resq 1
+    rel_table_size:  resq 1
+    rel_table_entsize: resq 1
+    rel_table_link:  resd 1
+    rel_target_index: resd 1
+    rel_target_name: resq 1
+    rel_entry_count: resq 1
+    rel_entry_index: resq 1
+    rel_entry:       resb 24
+    rel_offset:      resq 1
+    rel_info:        resq 1
+    rel_addend:      resq 1
+    rel_type_id:     resd 1
+    rel_symbol_index: resd 1
+    rel_symbol_state: resb 1
+    rel_symbol_name: resq 1
+    rel_tables_found: resq 1
 
     ; ---- disassembler state ----
     textbuf:        resb TEXT_CAP      ; raw bytes of the section being decoded
@@ -862,7 +966,7 @@ _start:
     mov byte [json_mode], 0
     mov byte [disasm_mode], 0
     mov byte [help_mode], 0
-    mov byte [filter_mask], 0
+    mov dword [filter_mask], 0
     mov rcx, 1               ; i = 1 (skip argv[0])
 .arg_loop:
     cmp rcx, r8
@@ -880,6 +984,7 @@ _start:
     FILTARG opt_dynamic,   FILT_DYNAMIC
     FILTARG opt_hardening, FILT_HARDENING
     FILTARG opt_symbols,   FILT_SYMBOLS
+    FILTARG opt_relocs,    FILT_RELOCS
     mov rsi, [r9 + rcx*8]
     test r10, r10            ; otherwise it's the path (only one allowed)
     jnz .usage
@@ -929,31 +1034,35 @@ _start:
     cmp byte [json_mode], 0
     jne .emit_json
     ; --- text report: run only the selected sections (empty mask = all) ---
-    movzx eax, byte [filter_mask]
-    test al, al
+    mov eax, dword [filter_mask]
+    test eax, eax
     jnz .mask_set
-    mov al, FILT_DEFAULT
+    mov eax, FILT_DEFAULT
 .mask_set:
-    mov [eff_mask], al
-    test byte [eff_mask], FILT_HEADER
+    mov [eff_mask], eax
+    test dword [eff_mask], FILT_HEADER
     jz .f_seg
     call print_header
 .f_seg:
-    test byte [eff_mask], FILT_SEGMENTS
+    test dword [eff_mask], FILT_SEGMENTS
     jz .f_sec
     call print_program_headers ; reads segments via fd in r12
 .f_sec:
-    test byte [eff_mask], FILT_SECTIONS
+    test dword [eff_mask], FILT_SECTIONS
     jz .f_symbols
     call print_section_headers ; reads sections via fd in r12
 .f_symbols:
-    test byte [eff_mask], FILT_SYMBOLS
-    jz .f_val
+    test dword [eff_mask], FILT_SYMBOLS
+    jz .f_relocs
     call print_symbol_tables
+.f_relocs:
+    test dword [eff_mask], FILT_RELOCS
+    jz .f_val
+    call print_relocation_tables
 .f_val:
     ; validation always runs so the exit code stays meaningful; it prints
     ; only when selected, otherwise it just counts [issues] silently.
-    test byte [eff_mask], FILT_VALIDATE
+    test dword [eff_mask], FILT_VALIDATE
     jnz .f_val_loud
     mov byte [silent], 1
     call validate_structure
@@ -962,15 +1071,15 @@ _start:
 .f_val_loud:
     call validate_structure    ; sanity-check offsets, counts [issues]
 .f_sec_check:
-    test byte [eff_mask], FILT_SECURITY
+    test dword [eff_mask], FILT_SECURITY
     jz .f_dyn
     call check_security        ; segment perms + stack exec, counts [warnings]
 .f_dyn:
-    test byte [eff_mask], FILT_DYNAMIC
+    test dword [eff_mask], FILT_DYNAMIC
     jz .f_hard
     call analyze_dynamic       ; needed libraries + imported symbols
 .f_hard:
-    test byte [eff_mask], FILT_HARDENING
+    test dword [eff_mask], FILT_HARDENING
     jz .after_output
     call check_hardening       ; exploit-mitigation posture (checksec-style)
     jmp .after_output
@@ -2616,6 +2725,776 @@ symbol_visibility_name:
     ret
 
 ; ---------------------------------------------------------------------------
+; Relocation sections. REL/RELA tables are opt-in in text mode because they can
+; be verbose. Symbol names are resolved through sh_link -> symtab -> strtab.
+; ---------------------------------------------------------------------------
+print_relocation_tables:
+    PRINT rel_title
+    mov byte [rel_json_mode], 0
+    call walk_relocation_tables
+    cmp qword [rel_tables_found], 0
+    jne .prt_done
+    PRINT rel_none
+.prt_done:
+    ret
+
+json_relocation_tables:
+    PRINT jk_relocation_tables
+    PRINT j_lbrack
+    mov byte [rel_json_mode], 1
+    mov byte [rel_table_first], 1
+    call walk_relocation_tables
+    mov byte [rel_json_mode], 0
+    PRINT j_rbrack
+    ret
+
+walk_relocation_tables:
+    mov qword [rel_tables_found], 0
+    mov rdi, r12
+    xor esi, esi
+    mov edx, SEEK_END
+    mov eax, SYS_LSEEK
+    syscall
+    test rax, rax
+    js .wrt_done
+    mov [filesize], rax
+
+    movzx r14d, word [ehdr + E_SHNUM]
+    test r14, r14
+    jz .wrt_done
+    movzx ecx, word [ehdr + E_SHENTSIZE]
+    cmp ecx, SHDR_SIZE
+    jb .wrt_done
+    mov rax, r14
+    mul rcx
+    test rdx, rdx
+    jnz .wrt_done
+    add rax, [ehdr + E_SHOFF]
+    jc .wrt_done
+    cmp rax, [filesize]
+    ja .wrt_done
+
+    call load_shstrtab
+    xor r13, r13
+.wrt_scan:
+    cmp r13, r14
+    jae .wrt_done
+    movzx eax, word [ehdr + E_SHENTSIZE]
+    imul rax, r13
+    add rax, [ehdr + E_SHOFF]
+    mov rdi, r12
+    mov rsi, rax
+    xor edx, edx
+    mov eax, SYS_LSEEK
+    syscall
+    mov rdi, r12
+    lea rsi, [shdr]
+    mov edx, SHDR_SIZE
+    mov eax, SYS_READ
+    syscall
+    cmp rax, SHDR_SIZE
+    jl .wrt_done
+
+    mov eax, dword [shdr + SH_TYPE]
+    cmp eax, 4                    ; SHT_RELA
+    je .wrt_rela
+    cmp eax, 9                    ; SHT_REL
+    jne .wrt_next
+    mov dword [rel_table_type], 9
+    jmp .wrt_match
+.wrt_rela:
+    mov dword [rel_table_type], 4
+.wrt_match:
+    mov [rel_table_index], r13
+    mov rax, [shdr + SH_OFFSET]
+    mov [rel_table_offset], rax
+    mov rax, [shdr + SH_SIZE]
+    mov [rel_table_size], rax
+    mov rax, [shdr + SH_ENTSIZE]
+    mov [rel_table_entsize], rax
+    mov eax, dword [shdr + SH_LINK]
+    mov [rel_table_link], eax
+    mov eax, dword [shdr + SH_INFO]
+    mov [rel_target_index], eax
+    call section_name_ptr
+    mov [rel_table_name], rsi
+
+    mov byte [rel_target_valid], 0
+    lea rax, [empty_str]
+    mov [rel_target_name], rax
+    mov eax, dword [rel_target_index]
+    test eax, eax
+    jz .wrt_target_done
+    movzx ecx, word [ehdr + E_SHNUM]
+    cmp eax, ecx
+    jae .wrt_target_done
+    movzx ecx, word [ehdr + E_SHENTSIZE]
+    imul rax, rcx
+    add rax, [ehdr + E_SHOFF]
+    jc .wrt_target_done
+    mov rdi, r12
+    mov rsi, rax
+    xor edx, edx
+    mov eax, SYS_LSEEK
+    syscall
+    mov rdi, r12
+    lea rsi, [shdr]
+    mov edx, SHDR_SIZE
+    mov eax, SYS_READ
+    syscall
+    cmp rax, SHDR_SIZE
+    jl .wrt_target_done
+    call section_name_ptr
+    mov [rel_target_name], rsi
+    mov byte [rel_target_valid], 1
+.wrt_target_done:
+
+    mov byte [rel_table_valid], 1
+    mov qword [rel_entry_count], 0
+    mov rax, [rel_table_entsize]
+    cmp dword [rel_table_type], 4
+    jne .wrt_min_rel
+    cmp rax, 24                  ; Elf64_Rela
+    jb .wrt_bad_table
+    jmp .wrt_check_range
+.wrt_min_rel:
+    cmp rax, 16                  ; Elf64_Rel
+    jb .wrt_bad_table
+.wrt_check_range:
+    mov rax, [rel_table_offset]
+    add rax, [rel_table_size]
+    jc .wrt_bad_table
+    cmp rax, [filesize]
+    ja .wrt_bad_table
+    mov rax, [rel_table_size]
+    xor edx, edx
+    div qword [rel_table_entsize]
+    test rdx, rdx
+    jnz .wrt_bad_table
+    mov [rel_entry_count], rax
+    jmp .wrt_metadata_done
+.wrt_bad_table:
+    mov byte [rel_table_valid], 0
+.wrt_metadata_done:
+    call load_relocation_symbols
+    inc qword [rel_tables_found]
+    cmp byte [rel_json_mode], 0
+    jne .wrt_json_header
+    call emit_relocation_text_header
+    jmp .wrt_entries
+.wrt_json_header:
+    call emit_relocation_json_header
+.wrt_entries:
+    mov qword [rel_entry_index], 0
+    mov byte [rel_item_first], 1
+.wrt_entry_loop:
+    mov rax, [rel_entry_index]
+    cmp rax, [rel_entry_count]
+    jae .wrt_entries_done
+    mul qword [rel_table_entsize]
+    test rdx, rdx
+    jnz .wrt_entries_done
+    add rax, [rel_table_offset]
+    jc .wrt_entries_done
+    mov rdi, r12
+    mov rsi, rax
+    xor edx, edx
+    mov eax, SYS_LSEEK
+    syscall
+    mov qword [rel_entry + 16], 0
+    mov rdi, r12
+    lea rsi, [rel_entry]
+    mov edx, 16
+    cmp dword [rel_table_type], 4
+    jne .wrt_read_entry
+    mov edx, 24
+.wrt_read_entry:
+    mov eax, SYS_READ
+    syscall
+    cmp dword [rel_table_type], 4
+    jne .wrt_check_rel_read
+    cmp rax, 24
+    jl .wrt_entries_done
+    jmp .wrt_parse_entry
+.wrt_check_rel_read:
+    cmp rax, 16
+    jl .wrt_entries_done
+.wrt_parse_entry:
+    mov rax, [rel_entry]
+    mov [rel_offset], rax
+    mov rax, [rel_entry + 8]
+    mov [rel_info], rax
+    mov edx, eax
+    mov [rel_type_id], edx
+    shr rax, 32
+    mov [rel_symbol_index], eax
+    cmp dword [rel_table_type], 4
+    jne .wrt_no_addend
+    mov rax, [rel_entry + 16]
+    mov [rel_addend], rax
+    jmp .wrt_resolve
+.wrt_no_addend:
+    mov qword [rel_addend], 0
+.wrt_resolve:
+    call resolve_relocation_symbol
+    cmp byte [rel_json_mode], 0
+    jne .wrt_emit_json
+    call emit_relocation_text
+    jmp .wrt_next_entry
+.wrt_emit_json:
+    call emit_relocation_json
+.wrt_next_entry:
+    inc qword [rel_entry_index]
+    jmp .wrt_entry_loop
+.wrt_entries_done:
+    cmp byte [rel_json_mode], 0
+    je .wrt_next
+    PRINT j_rbrack
+    PRINT j_rbrace
+.wrt_next:
+    inc r13
+    jmp .wrt_scan
+.wrt_done:
+    ret
+
+load_relocation_symbols:
+    mov byte [rel_symtab_valid], 0
+    mov byte [rel_str_valid], 0
+    mov qword [dynstr_len], 0
+    mov qword [sym_entry_count], 0
+    mov eax, dword [rel_table_link]
+    test eax, eax
+    jz .lrs_done
+    movzx ecx, word [ehdr + E_SHNUM]
+    cmp eax, ecx
+    jae .lrs_done
+    movzx ecx, word [ehdr + E_SHENTSIZE]
+    imul rax, rcx
+    add rax, [ehdr + E_SHOFF]
+    jc .lrs_done
+    mov rdi, r12
+    mov rsi, rax
+    xor edx, edx
+    mov eax, SYS_LSEEK
+    syscall
+    mov rdi, r12
+    lea rsi, [shdr]
+    mov edx, SHDR_SIZE
+    mov eax, SYS_READ
+    syscall
+    cmp rax, SHDR_SIZE
+    jl .lrs_done
+    mov eax, dword [shdr + SH_TYPE]
+    cmp eax, 2                    ; SHT_SYMTAB
+    je .lrs_save_table
+    cmp eax, 11                   ; SHT_DYNSYM
+    jne .lrs_done
+.lrs_save_table:
+    mov rax, [shdr + SH_OFFSET]
+    mov [sym_table_offset], rax
+    mov rax, [shdr + SH_SIZE]
+    mov [sym_table_size], rax
+    mov rax, [shdr + SH_ENTSIZE]
+    mov [sym_table_entsize], rax
+    mov eax, dword [shdr + SH_LINK]
+    mov [sym_table_link], eax
+    mov rax, [sym_table_entsize]
+    cmp rax, 24
+    jb .lrs_done
+    mov rax, [sym_table_offset]
+    add rax, [sym_table_size]
+    jc .lrs_done
+    cmp rax, [filesize]
+    ja .lrs_done
+    mov rax, [sym_table_size]
+    xor edx, edx
+    div qword [sym_table_entsize]
+    test rdx, rdx
+    jnz .lrs_done
+    mov [sym_entry_count], rax
+    mov byte [rel_symtab_valid], 1
+
+    mov eax, dword [sym_table_link]
+    test eax, eax
+    jz .lrs_done
+    movzx ecx, word [ehdr + E_SHNUM]
+    cmp eax, ecx
+    jae .lrs_done
+    call load_dynstr
+    cmp dword [shdr + SH_TYPE], 3 ; SHT_STRTAB
+    jne .lrs_bad_strtab
+    mov byte [rel_str_valid], 1
+    ret
+.lrs_bad_strtab:
+    mov qword [dynstr_len], 0
+.lrs_done:
+    ret
+
+resolve_relocation_symbol:
+    lea rax, [rel_unresolved]
+    mov [rel_symbol_name], rax
+    mov byte [rel_symbol_state], 0
+    cmp byte [rel_symtab_valid], 0
+    je .rrs_done
+    cmp dword [rel_symbol_index], 0
+    jne .rrs_nonzero
+    lea rax, [rel_no_symbol]
+    mov [rel_symbol_name], rax
+    mov byte [rel_symbol_state], 2
+    ret
+.rrs_nonzero:
+    cmp byte [rel_str_valid], 0
+    je .rrs_done
+    mov eax, dword [rel_symbol_index]
+    cmp rax, [sym_entry_count]
+    jae .rrs_done
+    mul qword [sym_table_entsize]
+    test rdx, rdx
+    jnz .rrs_done
+    add rax, [sym_table_offset]
+    jc .rrs_done
+    mov rdi, r12
+    mov rsi, rax
+    xor edx, edx
+    mov eax, SYS_LSEEK
+    syscall
+    mov rdi, r12
+    lea rsi, [syment]
+    mov edx, 24
+    mov eax, SYS_READ
+    syscall
+    cmp rax, 24
+    jl .rrs_done
+    mov eax, dword [syment]
+    call dynstr_name_ptr
+    mov [rel_symbol_name], rsi
+    mov byte [rel_symbol_state], 1
+.rrs_done:
+    ret
+
+emit_relocation_text_header:
+    PRINT rel_table_pre
+    mov rsi, [rel_table_name]
+    call print_cstr
+    PRINT rel_table_mid
+    mov rax, [rel_table_index]
+    call print_dec
+    PRINT rel_kind_mid
+    cmp dword [rel_table_type], 4
+    jne .erth_rel
+    lea rsi, [rel_kind_rela]
+    jmp .erth_kind
+.erth_rel:
+    lea rsi, [rel_kind_rel]
+.erth_kind:
+    call print_cstr
+    PRINT rel_target_mid
+    cmp byte [rel_target_valid], 0
+    je .erth_no_target
+    mov rsi, [rel_target_name]
+    call print_cstr
+    jmp .erth_count
+.erth_no_target:
+    PRINT rel_target_none
+.erth_count:
+    PRINT rel_count_mid
+    mov rax, [rel_entry_count]
+    call print_dec
+    PRINT rel_entries_end
+    PRINT rel_colhdr
+    cmp byte [rel_table_valid], 0
+    jne .erth_symtab
+    PRINT rel_bad_meta
+.erth_symtab:
+    cmp byte [rel_symtab_valid], 0
+    jne .erth_strtab
+    PRINT rel_bad_symtab
+.erth_strtab:
+    cmp byte [rel_str_valid], 0
+    jne .erth_done
+    PRINT rel_bad_strtab
+.erth_done:
+    ret
+
+emit_relocation_json_header:
+    cmp byte [rel_table_first], 1
+    je .erjh_first
+    PRINT j_comma
+.erjh_first:
+    mov byte [rel_table_first], 0
+    PRINT j_lbrace
+    PRINT jk_index
+    mov rax, [rel_table_index]
+    call print_dec
+    PRINT j_comma
+    PRINT jk_name
+    mov rsi, [rel_table_name]
+    call jstr
+    PRINT j_comma
+    PRINT jk_kind
+    cmp dword [rel_table_type], 4
+    jne .erjh_rel
+    lea rsi, [rel_kind_rela]
+    jmp .erjh_kind
+.erjh_rel:
+    lea rsi, [rel_kind_rel]
+.erjh_kind:
+    call jname
+    PRINT j_comma
+    PRINT jk_target_index
+    mov eax, dword [rel_target_index]
+    call print_dec
+    PRINT j_comma
+    PRINT jk_target_name
+    cmp byte [rel_target_valid], 0
+    je .erjh_no_target
+    mov rsi, [rel_target_name]
+    call jstr
+    jmp .erjh_count
+.erjh_no_target:
+    PRINT j_null
+.erjh_count:
+    PRINT j_comma
+    PRINT jk_entry_count
+    mov rax, [rel_entry_count]
+    call print_dec
+    PRINT j_comma
+    PRINT jk_valid
+    cmp byte [rel_table_valid], 0
+    je .erjh_invalid
+    PRINT j_true
+    jmp .erjh_symbols
+.erjh_invalid:
+    PRINT j_false
+.erjh_symbols:
+    PRINT j_comma
+    PRINT jk_symbol_table_valid
+    cmp byte [rel_symtab_valid], 0
+    je .erjh_no_symtab
+    PRINT j_true
+    jmp .erjh_strings
+.erjh_no_symtab:
+    PRINT j_false
+.erjh_strings:
+    PRINT j_comma
+    PRINT jk_strings_valid
+    cmp byte [rel_str_valid], 0
+    je .erjh_no_strings
+    PRINT j_true
+    jmp .erjh_relocations
+.erjh_no_strings:
+    PRINT j_false
+.erjh_relocations:
+    PRINT j_comma
+    PRINT jk_relocations
+    PRINT j_lbrack
+    ret
+
+emit_relocation_text:
+    PRINT two_spaces
+    mov rax, [rel_offset]
+    mov ecx, 19
+    call pfield_hex
+    mov eax, dword [rel_type_id]
+    call relocation_type_name
+    mov rsi, rax
+    mov ecx, 34
+    call print_cstr_pad
+    mov eax, dword [rel_type_id]
+    mov ecx, 8
+    call pfield_dec
+    mov eax, dword [rel_symbol_index]
+    mov ecx, 8
+    call pfield_dec
+    mov rsi, [rel_symbol_name]
+    mov ecx, 32
+    call print_cstr_pad
+    cmp dword [rel_table_type], 4
+    jne .ert_no_addend
+    mov rax, [rel_addend]
+    call print_signed
+    jmp .ert_end
+.ert_no_addend:
+    PRINT rel_minus
+.ert_end:
+    PRINT nl
+    ret
+
+emit_relocation_json:
+    cmp byte [rel_item_first], 1
+    je .erj_first
+    PRINT j_comma
+.erj_first:
+    mov byte [rel_item_first], 0
+    PRINT j_lbrace
+    PRINT jk_offset
+    mov rax, [rel_offset]
+    call jhex
+    PRINT j_comma
+    PRINT jk_type
+    mov eax, dword [rel_type_id]
+    call relocation_type_name
+    mov rsi, rax
+    call jname
+    PRINT j_comma
+    PRINT jk_type_id
+    mov eax, dword [rel_type_id]
+    call print_dec
+    PRINT j_comma
+    PRINT jk_symbol_index
+    mov eax, dword [rel_symbol_index]
+    call print_dec
+    PRINT j_comma
+    PRINT jk_symbol_name
+    cmp byte [rel_symbol_state], 1
+    jne .erj_no_symbol
+    mov rsi, [rel_symbol_name]
+    call jstr
+    jmp .erj_addend
+.erj_no_symbol:
+    PRINT j_null
+.erj_addend:
+    PRINT j_comma
+    PRINT jk_addend
+    cmp dword [rel_table_type], 4
+    jne .erj_no_addend
+    mov rax, [rel_addend]
+    call print_signed
+    jmp .erj_end
+.erj_no_addend:
+    PRINT j_null
+.erj_end:
+    PRINT j_rbrace
+    ret
+
+relocation_type_name:
+    cmp word [ehdr + E_MACHINE], 62
+    jne .rtn_other
+    cmp eax, 0
+    je .rtn_none
+    cmp eax, 1
+    je .rtn_64
+    cmp eax, 2
+    je .rtn_pc32
+    cmp eax, 3
+    je .rtn_got32
+    cmp eax, 4
+    je .rtn_plt32
+    cmp eax, 5
+    je .rtn_copy
+    cmp eax, 6
+    je .rtn_glob_dat
+    cmp eax, 7
+    je .rtn_jump_slot
+    cmp eax, 8
+    je .rtn_relative
+    cmp eax, 9
+    je .rtn_gotpc_rel
+    cmp eax, 10
+    je .rtn_32
+    cmp eax, 11
+    je .rtn_32s
+    cmp eax, 12
+    je .rtn_16
+    cmp eax, 13
+    je .rtn_pc16
+    cmp eax, 14
+    je .rtn_8
+    cmp eax, 15
+    je .rtn_pc8
+    cmp eax, 16
+    je .rtn_dtpmod64
+    cmp eax, 17
+    je .rtn_dtpoff64
+    cmp eax, 18
+    je .rtn_tpoff64
+    cmp eax, 19
+    je .rtn_tls_gd
+    cmp eax, 20
+    je .rtn_tls_ld
+    cmp eax, 21
+    je .rtn_dtpoff32
+    cmp eax, 22
+    je .rtn_gottpoff
+    cmp eax, 23
+    je .rtn_tpoff32
+    cmp eax, 24
+    je .rtn_pc64
+    cmp eax, 25
+    je .rtn_gotoff64
+    cmp eax, 26
+    je .rtn_gotpc32
+    cmp eax, 27
+    je .rtn_got64
+    cmp eax, 28
+    je .rtn_gotpcrel64
+    cmp eax, 29
+    je .rtn_gotpc64
+    cmp eax, 30
+    je .rtn_gotplt64
+    cmp eax, 31
+    je .rtn_pltoff64
+    cmp eax, 32
+    je .rtn_size32
+    cmp eax, 33
+    je .rtn_size64
+    cmp eax, 34
+    je .rtn_gotpc32_tlsdesc
+    cmp eax, 35
+    je .rtn_tlsdesc_call
+    cmp eax, 36
+    je .rtn_tlsdesc
+    cmp eax, 37
+    je .rtn_irelative
+    cmp eax, 38
+    je .rtn_relative64
+    cmp eax, 41
+    je .rtn_gotpcrelx
+    cmp eax, 42
+    je .rtn_rex_gotpcrelx
+    lea rax, [rel_type_unknown]
+    ret
+.rtn_other:
+    lea rax, [rel_type_other]
+    ret
+.rtn_none:
+    lea rax, [rt_none]
+    ret
+.rtn_64:
+    lea rax, [rt_64]
+    ret
+.rtn_pc32:
+    lea rax, [rt_pc32]
+    ret
+.rtn_got32:
+    lea rax, [rt_got32]
+    ret
+.rtn_plt32:
+    lea rax, [rt_plt32]
+    ret
+.rtn_copy:
+    lea rax, [rt_copy]
+    ret
+.rtn_glob_dat:
+    lea rax, [rt_glob_dat]
+    ret
+.rtn_jump_slot:
+    lea rax, [rt_jump_slot]
+    ret
+.rtn_relative:
+    lea rax, [rt_relative]
+    ret
+.rtn_gotpc_rel:
+    lea rax, [rt_gotpc_rel]
+    ret
+.rtn_32:
+    lea rax, [rt_32]
+    ret
+.rtn_32s:
+    lea rax, [rt_32s]
+    ret
+.rtn_16:
+    lea rax, [rt_16]
+    ret
+.rtn_pc16:
+    lea rax, [rt_pc16]
+    ret
+.rtn_8:
+    lea rax, [rt_8]
+    ret
+.rtn_pc8:
+    lea rax, [rt_pc8]
+    ret
+.rtn_dtpmod64:
+    lea rax, [rt_dtpmod64]
+    ret
+.rtn_dtpoff64:
+    lea rax, [rt_dtpoff64]
+    ret
+.rtn_tpoff64:
+    lea rax, [rt_tpoff64]
+    ret
+.rtn_tls_gd:
+    lea rax, [rt_tls_gd]
+    ret
+.rtn_tls_ld:
+    lea rax, [rt_tls_ld]
+    ret
+.rtn_dtpoff32:
+    lea rax, [rt_dtpoff32]
+    ret
+.rtn_gottpoff:
+    lea rax, [rt_gottpoff]
+    ret
+.rtn_tpoff32:
+    lea rax, [rt_tpoff32]
+    ret
+.rtn_pc64:
+    lea rax, [rt_pc64]
+    ret
+.rtn_gotoff64:
+    lea rax, [rt_gotoff64]
+    ret
+.rtn_gotpc32:
+    lea rax, [rt_gotpc32]
+    ret
+.rtn_got64:
+    lea rax, [rt_got64]
+    ret
+.rtn_gotpcrel64:
+    lea rax, [rt_gotpcrel64]
+    ret
+.rtn_gotpc64:
+    lea rax, [rt_gotpc64]
+    ret
+.rtn_gotplt64:
+    lea rax, [rt_gotplt64]
+    ret
+.rtn_pltoff64:
+    lea rax, [rt_pltoff64]
+    ret
+.rtn_size32:
+    lea rax, [rt_size32]
+    ret
+.rtn_size64:
+    lea rax, [rt_size64]
+    ret
+.rtn_gotpc32_tlsdesc:
+    lea rax, [rt_gotpc32_tlsdesc]
+    ret
+.rtn_tlsdesc_call:
+    lea rax, [rt_tlsdesc_call]
+    ret
+.rtn_tlsdesc:
+    lea rax, [rt_tlsdesc]
+    ret
+.rtn_irelative:
+    lea rax, [rt_irelative]
+    ret
+.rtn_relative64:
+    lea rax, [rt_relative64]
+    ret
+.rtn_gotpcrelx:
+    lea rax, [rt_gotpcrelx]
+    ret
+.rtn_rex_gotpcrelx:
+    lea rax, [rt_rex_gotpcrelx]
+    ret
+
+print_signed:
+    test rax, rax
+    jns .ps_positive
+    push rax
+    PRINT rel_minus
+    pop rax
+    neg rax
+    call print_dec
+    ret
+.ps_positive:
+    call print_dec
+    ret
+
+; ---------------------------------------------------------------------------
 ; print_needed - list DT_NEEDED entries from the .dynamic section.
 ;   uses [dyn_off]/[dyn_size]; dynstr must already be loaded.
 ; ---------------------------------------------------------------------------
@@ -3165,6 +4044,8 @@ print_json:
     call json_shdrs
     PRINT j_comma
     call json_symbol_tables
+    PRINT j_comma
+    call json_relocation_tables
     PRINT j_comma
     call json_validation
     PRINT j_comma

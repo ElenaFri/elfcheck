@@ -21,6 +21,7 @@ A lightweight ELF64 binary inspector for Linux x86-64, written in NASM assembly.
 - [x] Check segment permissions and executable stack settings
 - [x] Identify imported functions and dynamic dependencies
 - [x] Display static and dynamic symbol tables
+- [x] Display REL/RELA relocation entries and resolve symbol names
 - [x] Generate a security-oriented analysis report
 
 ## Requirements
@@ -78,20 +79,21 @@ The disassembly can be long; pipe it through a pager or the usual filters:
 
 By default the report prints its standard sections. Pass one or more **section
 filters** to show only what you need (handy to keep the output short); symbol
-tables are opt-in because they can be large:
+and relocation tables are opt-in because they can be large:
 
 ```bash
 ./elfcheck --hardening <file>            # just the hardening report
 ./elfcheck --header --dynamic <file>     # header + dynamic linking only
 ./elfcheck --symbols <file>              # static and dynamic symbol tables
+./elfcheck --relocs <file>               # REL/RELA relocations and symbols
 ```
 
 Available filters: `--header`, `--segments`, `--sections`, `--validate`,
-`--security`, `--dynamic`, `--hardening`, `--symbols`. The `--symbols` filter is
-opt-in because tables can be large; `--json` always includes them under
-`symbol_tables`. Structural validation always runs so the exit code stays
-meaningful, even when its section is hidden. Filters apply to the default text
-report; `--json` always emits the complete object. Use
+`--security`, `--dynamic`, `--hardening`, `--symbols`, `--relocs`. Symbol and
+relocation tables are opt-in because they can be large; `--json` always includes
+them under `symbol_tables` and `relocation_tables`. Structural validation always
+runs so the exit code stays meaningful, even when its section is hidden. Filters
+apply to the default text report; `--json` always emits the complete object. Use
 `--help` (or `-h`) to list every option.
 
 The default report ends with a `Security:` section that flags common red flags:
