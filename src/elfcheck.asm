@@ -126,6 +126,7 @@
 
 ; max bytes of an executable section we disassemble
 %define TEXT_CAP    262144
+%define FUNC_CACHE_CAP 8192
 
 ; max bytes of the dynamic string table we buffer
 %define DYNSTR_CAP  262144
@@ -593,6 +594,8 @@ section .rodata
     dis_function_title: db 10, "Disassembly of function ", 0
     dis_function_section: db " in section ", 0
     dis_colon_nl:   db ":", 10, 0
+    dis_sym_open:   db " <", 0
+    dis_sym_close:  db ">", 0
     dis_nosect:     db "elfcheck: no executable .text section to disassemble", 10
     dis_nosect_len: equ $ - dis_nosect
     func_err_not_found: db "elfcheck: function not found: ", 0
@@ -1028,7 +1031,13 @@ section .bss
     func_symbol_value: resq 1
     func_symbol_size: resq 1
     func_section_size: resq 1
-    func_delta: resq 1
+    func_delta:     resq 1
+    func_cache_count: resq 1
+    func_cache_names_len: resq 1
+    func_cache_values: resq FUNC_CACHE_CAP
+    func_cache_name_offsets: resq FUNC_CACHE_CAP
+    func_cache_names: resb DYNSTR_CAP
+    d_rel_target:   resq 1
 
 section .text
     global _start
@@ -5111,6 +5120,179 @@ print_stderr_cstr:
     call print_stderr
     ret
 
+; Build a bounded cache so relative branch annotation requires no file I/O
+; while instructions are being decoded.
+build_disasm_symbol_cache:
+    push rbx
+    push r13
+    push r14
+    mov qword [func_cache_count], 0
+    mov qword [func_cache_names_len], 0
+    movzx eax, word [ehdr + E_TYPE]
+    cmp eax, ET_EXEC
+    je .bsc_size
+    cmp eax, ET_DYN
+    jne .bsc_done
+.bsc_size:
+    mov rdi, r12
+    xor esi, esi
+    mov edx, SEEK_END
+    mov eax, SYS_LSEEK
+    syscall
+    test rax, rax
+    js .bsc_done
+    mov [filesize], rax
+    mov dword [func_table_type], 2       ; SHT_SYMTAB first
+    call .load_table
+    mov dword [func_table_type], 11      ; then SHT_DYNSYM
+    call .load_table
+.bsc_done:
+    pop r14
+    pop r13
+    pop rbx
+    ret
+
+.load_table:
+    mov eax, [func_table_type]
+    call find_section
+    cmp rax, -1
+    je .lt_done
+    mov rax, [shdr + SH_OFFSET]
+    mov [func_table_offset], rax
+    mov rax, [shdr + SH_SIZE]
+    mov [func_table_size], rax
+    mov rax, [shdr + SH_ENTSIZE]
+    mov [func_table_entsize], rax
+    mov eax, [shdr + SH_LINK]
+    mov [func_table_link], eax
+    cmp qword [func_table_entsize], 24
+    jb .lt_done
+    cmp qword [func_table_size], 0
+    je .lt_done
+    mov rax, [func_table_offset]
+    add rax, [func_table_size]
+    jc .lt_done
+    cmp rax, [filesize]
+    ja .lt_done
+    mov rax, [func_table_size]
+    xor edx, edx
+    div qword [func_table_entsize]
+    test rdx, rdx
+    jnz .lt_done
+    mov [func_table_count], rax
+    mov eax, [func_table_link]
+    test eax, eax
+    jz .lt_done
+    movzx ecx, word [ehdr + E_SHNUM]
+    cmp eax, ecx
+    jae .lt_done
+    mov qword [dynstr_len], 0
+    call load_dynstr
+    cmp dword [shdr + SH_TYPE], 3 ; SHT_STRTAB
+    jne .lt_done
+    cmp qword [dynstr_len], 0
+    je .lt_done
+    mov rax, [func_table_offset]
+    mov [func_table_current], rax
+.symbol_loop:
+    cmp qword [func_table_count], 0
+    je .lt_done
+    cmp qword [func_cache_count], FUNC_CACHE_CAP
+    jae .lt_done
+    mov rdi, r12
+    mov rsi, [func_table_current]
+    xor edx, edx
+    mov eax, SYS_LSEEK
+    syscall
+    test rax, rax
+    js .lt_done
+    mov rdi, r12
+    lea rsi, [syment]
+    mov edx, 24
+    mov eax, SYS_READ
+    syscall
+    cmp rax, 24
+    jne .lt_done
+    movzx eax, byte [syment + 4]
+    and eax, 0x0f
+    cmp eax, 2                       ; STT_FUNC
+    jne .symbol_next
+    movzx eax, word [syment + 6]     ; defined section index
+    test eax, eax
+    jz .symbol_next
+    cmp eax, 0xffff                  ; SHN_XINDEX is not resolved here
+    je .symbol_next
+    movzx ecx, word [ehdr + E_SHNUM]
+    cmp eax, ecx
+    jae .symbol_next
+    mov eax, [syment]
+    cmp rax, [dynstr_len]
+    jae .symbol_next
+    call dynstr_name_ptr
+    cmp byte [rsi], 0
+    je .symbol_next
+    mov rbx, rsi
+    xor ecx, ecx
+.name_length:
+    cmp byte [rbx + rcx], 0
+    je .name_ready
+    inc ecx
+    jmp .name_length
+.name_ready:
+    mov rdx, [func_cache_names_len]
+    mov r8, DYNSTR_CAP
+    sub r8, rdx
+    mov r9, rcx
+    inc r9                           ; include NUL terminator
+    cmp r9, r8
+    ja .symbol_next
+    mov rax, [func_cache_count]
+    mov rdx, [syment + 8]            ; st_value
+    lea r10, [func_cache_values]
+    mov [r10 + rax*8], rdx
+    mov rdx, [func_cache_names_len]
+    lea r10, [func_cache_name_offsets]
+    mov [r10 + rax*8], rdx
+    lea rdi, [func_cache_names]
+    add rdi, rdx
+    mov rsi, rbx
+    mov rcx, r9
+    rep movsb
+    add qword [func_cache_names_len], r9
+    inc qword [func_cache_count]
+.symbol_next:
+    mov rax, [func_table_current]
+    add rax, [func_table_entsize]
+    jc .lt_done
+    mov [func_table_current], rax
+    dec qword [func_table_count]
+    jmp .symbol_loop
+.lt_done:
+    ret
+
+; lookup_function_name - in rax = target address; out rsi = name or NULL.
+lookup_function_name:
+    mov rdx, rax
+    xor ecx, ecx
+.lfn_loop:
+    cmp rcx, [func_cache_count]
+    jae .lfn_none
+    lea r8, [func_cache_values]
+    mov rax, [r8 + rcx*8]
+    cmp rax, rdx
+    je .lfn_found
+    inc rcx
+    jmp .lfn_loop
+.lfn_found:
+    lea r8, [func_cache_name_offsets]
+    mov rax, [r8 + rcx*8]
+    lea rsi, [func_cache_names]
+    add rsi, rax
+    ret
+.lfn_none:
+    xor esi, esi
+    ret
+
 ; disassemble - locate .text (PROGBITS + EXECINSTR), load it, decode & print.
 disassemble:
     mov qword [issues], 0
@@ -5124,6 +5306,7 @@ disassemble:
     jmp .none
 .have_sections:
     call load_shstrtab
+    call build_disasm_symbol_cache
     cmp qword [function_name], 0
     jne .select_function
     xor r13, r13
@@ -5795,7 +5978,18 @@ render_operands:
     sub rax, [d_start]
     add rax, [d_vaddr]
     add rax, [d_imm]
+    mov [d_rel_target], rax
     call print_hex
+    mov rax, [d_rel_target]
+    call lookup_function_name
+    test rsi, rsi
+    jz .rel_done
+    push rsi
+    PRINT dis_sym_open
+    pop rsi
+    call print_cstr
+    PRINT dis_sym_close
+.rel_done:
     ret
 .imm:
     call emit_imm

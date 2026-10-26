@@ -67,7 +67,8 @@ report (pipe through `jq` to pretty-print):
 Disassemble the executable `.text` section (Intel syntax, with addresses and raw
 opcodes). The decoder covers common x86-64 integer instructions and selected SSE
 operations. AVX and other unknown opcode bytes fall back to `.byte` one at a time,
-so instruction boundaries may be lost after an unsupported encoding:
+so instruction boundaries may be lost after an unsupported encoding. For linked
+executables, direct branch targets are annotated when they exactly match a function symbol.
 
 ```bash
 ./elfcheck --disasm <file>   # or: ./elfcheck -d <file>

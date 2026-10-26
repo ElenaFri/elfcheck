@@ -322,7 +322,8 @@ out="$("$BIN" --function 2>&1)"; code=$?
 check "--function requires a name and file" 1 "$code" "Usage:" "$out"
 if command -v gcc >/dev/null 2>&1; then
     cat > "$TMP/functions.c" <<'EOF'
-__attribute__((noinline)) int elfcheck_target(int value) { return value + 7; }
+__attribute__((noinline)) int elfcheck_callee(int value) { return value * 2; }
+__attribute__((noinline)) int elfcheck_target(int value) { return elfcheck_callee(value) + 7; }
 __attribute__((noinline)) int elfcheck_other(int value) {
     __asm__ volatile ("ud2");
     return value * 31;
@@ -342,11 +343,18 @@ __attribute__((noinline)) void elfcheck_sse_copy(float *destination, const float
         : : "r"(destination), "r"(source)
         : "xmm0", "xmm1", "xmm2", "xmm3", "xmm4", "memory");
 }
+__attribute__((naked, noinline)) void elfcheck_jump(void) {
+    __asm__ volatile ("jmp elfcheck_callee");
+}
+__attribute__((naked, noinline)) void elfcheck_conditional_jump(void) {
+    __asm__ volatile ("test %edi, %edi\n\tje elfcheck_callee\n\tret");
+}
 int main(void) { return elfcheck_target(1) + elfcheck_other(2); }
 EOF
     if gcc -g -O0 -fno-inline -o "$TMP/functions.elf" "$TMP/functions.c" 2>/dev/null; then
         out="$("$BIN" --function elfcheck_target "$TMP/functions.elf" 2>&1)"; code=$?
         check "--function selects a named function" 0 "$code" "Disassembly of function elfcheck_target in section .text:" "$out"
+        check "direct call target is annotated with its symbol" 0 "$code" "<elfcheck_callee>" "$out"
         check_absent "target disassembly excludes other function bytes" 0 "$code" ".byte 0x0f" "$out"
         check_absent "target disassembly omits whole-section title" 0 "$code" "Disassembly of section .text:" "$out"
 
@@ -364,6 +372,11 @@ EOF
         check "SSE decoder handles packed arithmetic" 0 "$code" "addps" "$out"
         check "SSE decoder selects 66-prefix variants" 0 "$code" "movupd" "$out"
         check "SSE decoder handles packed double operation" 0 "$code" "xorpd" "$out"
+
+        out="$("$BIN" --function elfcheck_jump "$TMP/functions.elf" 2>&1)"; code=$?
+        check "direct jmp target is annotated" 0 "$code" "<elfcheck_callee>" "$out"
+        out="$("$BIN" --function elfcheck_conditional_jump "$TMP/functions.elf" 2>&1)"; code=$?
+        check "conditional branch target is annotated" 0 "$code" "<elfcheck_callee>" "$out"
 
         out="$("$BIN" --function elfcheck_missing "$TMP/functions.elf" 2>&1)"; code=$?
         check "missing function reports an error" 1 "$code" "function not found: elfcheck_missing" "$out"
@@ -417,6 +430,15 @@ PY
         if gcc -no-pie -g -O0 -fno-inline -o "$TMP/functions.exec" "$TMP/functions.c" 2>/dev/null; then
             out="$("$BIN" --function elfcheck_target "$TMP/functions.exec" 2>&1)"; code=$?
             check "--function resolves ET_EXEC virtual addresses" 0 "$code" "Disassembly of function elfcheck_target in section .text:" "$out"
+            check "ET_EXEC direct call target is annotated" 0 "$code" "<elfcheck_callee>" "$out"
+        fi
+
+        if command -v strip >/dev/null 2>&1; then
+            if gcc -rdynamic -g -O0 -fno-inline -o "$TMP/functions.exported" "$TMP/functions.c" 2>/dev/null && strip --strip-all "$TMP/functions.exported" 2>/dev/null; then
+                out="$("$BIN" --function elfcheck_target "$TMP/functions.exported" 2>&1)"; code=$?
+                check "stripped dynsym function is found" 0 "$code" "Disassembly of function elfcheck_target" "$out"
+                check "stripped dynsym call target is annotated" 0 "$code" "<elfcheck_callee>" "$out"
+            fi
         fi
     fi
 fi
