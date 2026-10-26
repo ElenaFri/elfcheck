@@ -1,5 +1,7 @@
 # elfcheck
 
+[![Coverage](https://codecov.io/gh/ElenaFri/elfcheck/branch/main/graph/badge.svg)](https://codecov.io/gh/ElenaFri/elfcheck)
+
 A lightweight ELF64 inspector for Linux x86-64, written in NASM. It parses headers, segments, sections, symbol and relocation tables; disassembles machine code; and reports dynamic dependencies, structural issues and hardening. Optional JSON output; no libc, direct syscalls only.
 
 ## Features
@@ -50,6 +52,17 @@ Run the test suite:
 ```bash
 make test
 ```
+
+Measure NASM source-line coverage with `kcov` (the HTML report is written to
+`coverage/index.html`):
+
+```bash
+sudo apt install kcov
+make coverage
+```
+
+CI uploads the report to Codecov to update the badge. Enable the repository on
+Codecov and add its `CODECOV_TOKEN` as a GitHub Actions secret.
 
 ## Usage
 

@@ -6,10 +6,13 @@
 #   make            build the elfcheck binary
 #   make run ARGS=f run against a file
 #   make test       build and run the test suite
-#   make clean      remove build artifacts
+#   make coverage   run tests under kcov and generate a source coverage report
+#   make clean      remove build and coverage artifacts
 
 NASM      ?= nasm
 LD        ?= ld
+KCOV      ?= kcov
+COVERAGE_DIR ?= coverage
 
 TARGET    := elfcheck
 SRC_DIR   := src
@@ -23,7 +26,7 @@ OBJS := $(patsubst $(SRC_DIR)/%.asm,$(BUILD_DIR)/%.o,$(SRCS))
 NASMFLAGS ?= -f elf64 -g -F dwarf -Wall -w-reloc-rel-dword -w-reloc-abs-qword
 LDFLAGS   ?= -nostdlib -no-pie
 
-.PHONY: all run test clean
+.PHONY: all run test coverage clean
 
 all: $(TARGET)
 
@@ -31,7 +34,7 @@ $(TARGET): $(OBJS) Makefile
 	$(LD) $(LDFLAGS) -o $@ $(OBJS)
 
 $(BUILD_DIR)/%.o: $(SRC_DIR)/%.asm Makefile | $(BUILD_DIR)
-	$(NASM) $(NASMFLAGS) -o $@ $<
+	$(NASM) $(NASMFLAGS) -o "$@" "$(CURDIR)/$<"
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
@@ -42,5 +45,20 @@ run: $(TARGET)
 test: $(TARGET)
 	./tests/run_tests.sh
 
+coverage:
+	@command -v $(KCOV) >/dev/null 2>&1 || { \
+		echo "error: kcov is required (Debian/Ubuntu: sudo apt install kcov)" >&2; \
+		exit 1; \
+	}
+	$(MAKE) $(TARGET)
+	@rm -rf "$(COVERAGE_DIR)"
+	KCOV_BIN="$(KCOV)" \
+	KCOV_INCLUDE_PATH="$(CURDIR)/$(SRC_DIR)" \
+	KCOV_OUTPUT_DIR="$(CURDIR)/$(COVERAGE_DIR)" \
+	ELFCHECK_REAL_BIN="$(CURDIR)/$(TARGET)" \
+	ELFCHECK_RUN_BIN="$(CURDIR)/tests/kcov-wrapper.sh" \
+	./tests/run_tests.sh
+	@printf 'Coverage report: %s/index.html\n' "$(COVERAGE_DIR)"
+
 clean:
-	rm -rf $(BUILD_DIR) $(TARGET)
+	rm -rf $(BUILD_DIR) $(TARGET) "$(COVERAGE_DIR)"

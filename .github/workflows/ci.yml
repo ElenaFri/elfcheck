@@ -7,14 +7,58 @@ on:
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
       - name: Install toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y nasm binutils make gcc python3
+          sudo apt-get install -y nasm binutils make gcc python3 kcov
 
-      - name: Build and test
-        run: make test
+      - name: Build, test, and generate coverage
+        run: make coverage
+
+      - name: Verify assembly coverage report
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          reports = sorted(Path("coverage").rglob("cobertura.xml"))
+          if not reports:
+              raise SystemExit("kcov did not produce a Cobertura XML report")
+
+          assembly_files = set()
+          valid_lines = 0
+          covered_lines = 0
+          for report in reports:
+              root = ET.parse(report).getroot()
+              for class_node in root.findall(".//class"):
+                  filename = class_node.get("filename", "")
+                  if not filename.endswith(".asm"):
+                      continue
+                  assembly_files.add(filename)
+                  for line in class_node.findall("./lines/line"):
+                      valid_lines += 1
+                      covered_lines += int(line.get("hits", "0")) > 0
+
+          if not assembly_files or not valid_lines or not covered_lines:
+              raise SystemExit(
+                  "kcov report has no executed NASM source lines "
+                  f"(files={len(assembly_files)}, valid={valid_lines}, covered={covered_lines})"
+              )
+
+          print(
+              f"kcov report covers {covered_lines}/{valid_lines} NASM lines "
+              f"across {len(assembly_files)} source files"
+          )
+          PY
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          directory: ./coverage
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: true
+          verbose: true

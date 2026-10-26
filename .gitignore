@@ -3,6 +3,7 @@
 *.elf
 *.bin
 /build/
+/coverage/
 /dist/
 /elfcheck
 
