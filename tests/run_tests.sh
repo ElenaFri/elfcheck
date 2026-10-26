@@ -233,6 +233,12 @@ EOF
         check "--relocs resolves symbol name"         0 "$code" "elfcheck_reloc_target" "$out"
         check "--relocs prints signed addend"         0 "$code" "-4" "$out"
 
+        out="$("$BIN" --function elfcheck_reloc_fixture "$TMP/relocs.o" 2>&1)"; code=$?
+        check "ET_REL branch resolves its relocation symbol and type" 0 "$code" "<elfcheck_reloc_target> [R_X86_64_PLT32]" "$out"
+
+        out="$("$BIN" --disasm "$TMP/relocs.o" 2>&1)"; code=$?
+        check "ET_REL full-section disassembly resolves relocation target" 0 "$code" "<elfcheck_reloc_target> [R_X86_64_PLT32]" "$out"
+
         out="$("$BIN" "$TMP/relocs.o" --relocs 2>&1)"; code=$?
         check "--relocs accepted after path"           0 "$code" "Relocations:" "$out"
 
@@ -277,6 +283,8 @@ PY
             out="$("$BIN" --relocs "$TMP/rel.o" 2>&1)"; code=$?
             check "SHT_REL entries are decoded" 0 "$code" "(index 2, REL, target: .text" "$out"
             check "REL entries omit the addend" 0 "$code" "elfcheck_reloc_target" "$out"
+            out="$("$BIN" --function elfcheck_reloc_fixture "$TMP/rel.o" 2>&1)"; code=$?
+            check "ET_REL SHT_REL branch resolves its symbol and type" 0 "$code" "<elfcheck_reloc_target> [R_X86_64_PLT32]" "$out"
             out="$("$BIN" --json "$TMP/rel.o" 2>&1)"; code=$?
             check "JSON REL addend is null" 0 "$code" '"addend":null' "$out"
 

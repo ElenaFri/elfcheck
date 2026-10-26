@@ -127,6 +127,7 @@
 ; max bytes of an executable section we disassemble
 %define TEXT_CAP    262144
 %define FUNC_CACHE_CAP 8192
+%define RELOC_CACHE_CAP 8192
 
 ; max bytes of the dynamic string table we buffer
 %define DYNSTR_CAP  262144
@@ -596,6 +597,8 @@ section .rodata
     dis_colon_nl:   db ":", 10, 0
     dis_sym_open:   db " <", 0
     dis_sym_close:  db ">", 0
+    dis_reloc_open: db " [", 0
+    dis_reloc_close: db "]", 0
     dis_nosect:     db "elfcheck: no executable .text section to disassemble", 10
     dis_nosect_len: equ $ - dis_nosect
     func_err_not_found: db "elfcheck: function not found: ", 0
@@ -1018,6 +1021,7 @@ section .bss
     sel_size:       resq 1             ; its size in bytes
     sel_addr:       resq 1             ; its virtual address
     sel_name:       resq 1             ; pointer to its name
+    sel_index:      resq 1             ; section index for the selected range
     func_table_type: resd 1
     func_table_offset: resq 1
     func_table_size: resq 1
@@ -1038,6 +1042,13 @@ section .bss
     func_cache_name_offsets: resq FUNC_CACHE_CAP
     func_cache_names: resb DYNSTR_CAP
     d_rel_target:   resq 1
+    reloc_cache_count: resq 1
+    reloc_cache_names_len: resq 1
+    reloc_cache_offsets: resq RELOC_CACHE_CAP
+    reloc_cache_name_offsets: resq RELOC_CACHE_CAP
+    reloc_cache_type_ids: resd RELOC_CACHE_CAP
+    reloc_cache_names: resb DYNSTR_CAP
+    reloc_cache_match_type: resd 1
 
 section .text
     global _start
@@ -5102,6 +5113,8 @@ select_function_range:
     mov [sel_off], rax
     mov rax, [func_symbol_size]
     mov [sel_size], rax
+    mov eax, [func_symbol_shndx]
+    mov [sel_index], rax
     mov eax, 1
     ret
 .sfr_bad:
@@ -5293,10 +5306,221 @@ lookup_function_name:
     xor esi, esi
     ret
 
+; Build a bounded cache of PC-relative relocations for the selected ET_REL section.
+build_disasm_relocation_cache:
+    push rbx
+    push r13
+    push r14
+    push r15
+    mov qword [reloc_cache_count], 0
+    mov qword [reloc_cache_names_len], 0
+    mov dword [reloc_cache_match_type], 0
+    cmp word [ehdr + E_TYPE], ET_REL
+    jne .bdrc_done
+    cmp word [ehdr + E_MACHINE], 62
+    jne .bdrc_done
+
+    mov rdi, r12
+    xor esi, esi
+    mov edx, SEEK_END
+    mov eax, SYS_LSEEK
+    syscall
+    test rax, rax
+    js .bdrc_done
+    mov [filesize], rax
+    movzx r14d, word [ehdr + E_SHNUM]
+    test r14, r14
+    jz .bdrc_done
+    movzx ecx, word [ehdr + E_SHENTSIZE]
+    cmp ecx, SHDR_SIZE
+    jb .bdrc_done
+    mov rax, r14
+    mul rcx
+    test rdx, rdx
+    jnz .bdrc_done
+    add rax, [ehdr + E_SHOFF]
+    jc .bdrc_done
+    cmp rax, [filesize]
+    ja .bdrc_done
+
+    xor r13d, r13d
+.bdrc_scan:
+    cmp r13, r14
+    jae .bdrc_done
+    movzx eax, word [ehdr + E_SHENTSIZE]
+    imul rax, r13
+    add rax, [ehdr + E_SHOFF]
+    mov rdi, r12
+    mov rsi, rax
+    xor edx, edx
+    mov eax, SYS_LSEEK
+    syscall
+    test rax, rax
+    js .bdrc_done
+    mov rdi, r12
+    lea rsi, [shdr]
+    mov edx, SHDR_SIZE
+    mov eax, SYS_READ
+    syscall
+    cmp rax, SHDR_SIZE
+    jl .bdrc_done
+
+    mov eax, dword [shdr + SH_TYPE]
+    cmp eax, 4                    ; SHT_RELA
+    je .bdrc_rela
+    cmp eax, 9                    ; SHT_REL
+    jne .bdrc_next_section
+    mov dword [rel_table_type], 9
+    jmp .bdrc_match_target
+.bdrc_rela:
+    mov dword [rel_table_type], 4
+.bdrc_match_target:
+    mov eax, dword [shdr + SH_INFO]
+    cmp rax, [sel_index]
+    jne .bdrc_next_section
+    mov rax, [shdr + SH_OFFSET]
+    mov [rel_table_offset], rax
+    mov rax, [shdr + SH_SIZE]
+    mov [rel_table_size], rax
+    mov rax, [shdr + SH_ENTSIZE]
+    mov [rel_table_entsize], rax
+    mov eax, dword [shdr + SH_LINK]
+    mov [rel_table_link], eax
+    mov qword [rel_entry_count], 0
+
+    mov rax, [rel_table_entsize]
+    cmp dword [rel_table_type], 4
+    jne .bdrc_min_rel
+    cmp rax, 24                  ; Elf64_Rela
+    jb .bdrc_next_section
+    jmp .bdrc_check_range
+.bdrc_min_rel:
+    cmp rax, 16                  ; Elf64_Rel
+    jb .bdrc_next_section
+.bdrc_check_range:
+    mov rax, [rel_table_offset]
+    add rax, [rel_table_size]
+    jc .bdrc_next_section
+    cmp rax, [filesize]
+    ja .bdrc_next_section
+    mov rax, [rel_table_size]
+    xor edx, edx
+    div qword [rel_table_entsize]
+    test rdx, rdx
+    jnz .bdrc_next_section
+    mov [rel_entry_count], rax
+
+    call load_relocation_symbols
+    cmp byte [rel_symtab_valid], 1
+    jne .bdrc_next_section
+    cmp byte [rel_str_valid], 1
+    jne .bdrc_next_section
+    mov qword [rel_entry_index], 0
+.bdrc_entry_loop:
+    mov rax, [rel_entry_index]
+    cmp rax, [rel_entry_count]
+    jae .bdrc_next_section
+    mul qword [rel_table_entsize]
+    test rdx, rdx
+    jnz .bdrc_next_section
+    add rax, [rel_table_offset]
+    jc .bdrc_next_section
+    mov rdi, r12
+    mov rsi, rax
+    xor edx, edx
+    mov eax, SYS_LSEEK
+    syscall
+    test rax, rax
+    js .bdrc_next_section
+    mov qword [rel_entry + 16], 0
+    mov rdi, r12
+    lea rsi, [rel_entry]
+    mov edx, 16
+    cmp dword [rel_table_type], 4
+    jne .bdrc_read_entry
+    mov edx, 24
+.bdrc_read_entry:
+    mov eax, SYS_READ
+    syscall
+    cmp dword [rel_table_type], 4
+    jne .bdrc_read_rel
+    cmp rax, 24
+    jl .bdrc_next_section
+    jmp .bdrc_parse_entry
+.bdrc_read_rel:
+    cmp rax, 16
+    jl .bdrc_next_section
+.bdrc_parse_entry:
+    mov rax, [rel_entry]
+    mov [rel_offset], rax
+    mov rax, [rel_entry + 8]
+    mov edx, eax
+    mov [rel_type_id], edx
+    cmp edx, 2                   ; R_X86_64_PC32
+    je .bdrc_supported_type
+    cmp edx, 4                   ; R_X86_64_PLT32
+    je .bdrc_supported_type
+    cmp edx, 15                  ; R_X86_64_PC8
+    jne .bdrc_entry_next
+.bdrc_supported_type:
+    shr rax, 32
+    mov [rel_symbol_index], eax
+    call resolve_relocation_symbol
+    cmp byte [rel_symbol_state], 1
+    jne .bdrc_entry_next
+    mov rsi, [rel_symbol_name]
+    cmp byte [rsi], 0
+    je .bdrc_entry_next
+    mov rbx, rsi
+    xor ecx, ecx
+.bdrc_name_len:
+    cmp byte [rbx + rcx], 0
+    je .bdrc_name_ready
+    inc ecx
+    jmp .bdrc_name_len
+.bdrc_name_ready:
+    lea r9, [rcx + 1]
+    mov r8, DYNSTR_CAP
+    sub r8, [reloc_cache_names_len]
+    cmp r9, r8
+    ja .bdrc_entry_next
+    mov rax, [reloc_cache_count]
+    cmp rax, RELOC_CACHE_CAP
+    jae .bdrc_done
+    mov rdx, [rel_offset]
+    lea r8, [reloc_cache_offsets]
+    mov [r8 + rax*8], rdx
+    mov edx, [rel_type_id]
+    lea r8, [reloc_cache_type_ids]
+    mov [r8 + rax*4], edx
+    mov rdx, [reloc_cache_names_len]
+    lea r8, [reloc_cache_name_offsets]
+    mov [r8 + rax*8], rdx
+    lea rdi, [reloc_cache_names]
+    add rdi, rdx
+    mov rsi, rbx
+    mov rcx, r9
+    rep movsb
+    add [reloc_cache_names_len], r9
+    inc qword [reloc_cache_count]
+.bdrc_entry_next:
+    inc qword [rel_entry_index]
+    jmp .bdrc_entry_loop
+.bdrc_next_section:
+    inc r13
+    jmp .bdrc_scan
+.bdrc_done:
+    pop r15
+    pop r14
+    pop r13
+    pop rbx
+    ret
+
 ; disassemble - locate .text (PROGBITS + EXECINSTR), load it, decode & print.
 disassemble:
     mov qword [issues], 0
     mov qword [sel_off], -1
+    mov qword [sel_index], 0
     mov qword [text_trunc], 0
     movzx r14d, word [ehdr + E_SHNUM]
     test r14, r14
@@ -5358,6 +5582,7 @@ disassemble:
     mov rax, [shdr + SH_ADDR]
     mov [sel_addr], rax
     mov [sel_name], rsi
+    mov [sel_index], r13
     ret
 .find_done:
     cmp qword [sel_off], -1
@@ -5388,6 +5613,7 @@ disassemble:
     mov byte [disasm_error], 1
     ret
 .load_selected:
+    call build_disasm_relocation_cache
     mov rax, [sel_size]                 ; clamp to TEXT_CAP
     cmp rax, TEXT_CAP
     jbe .szok
@@ -5896,6 +6122,32 @@ print_byte_hex:
     call print_str
     ret
 
+; lookup_disasm_relocation - in rax = relocation field offset;
+;   out rsi = symbol name or NULL, type saved in reloc_cache_match_type.
+lookup_disasm_relocation:
+    mov rdx, rax
+    xor ecx, ecx
+.ldr_loop:
+    cmp rcx, [reloc_cache_count]
+    jae .ldr_none
+    lea r8, [reloc_cache_offsets]
+    cmp [r8 + rcx*8], rdx
+    je .ldr_found
+    inc rcx
+    jmp .ldr_loop
+.ldr_found:
+    lea r8, [reloc_cache_name_offsets]
+    mov rax, [r8 + rcx*8]
+    lea rsi, [reloc_cache_names]
+    add rsi, rax
+    lea r8, [reloc_cache_type_ids]
+    mov eax, [r8 + rcx*4]
+    mov [reloc_cache_match_type], eax
+    ret
+.ldr_none:
+    xor esi, esi
+    ret
+
 ; render_operands - print operands according to [d_style]
 render_operands:
     movzx eax, byte [d_style]
@@ -5974,6 +6226,29 @@ render_operands:
     call emit_imm
     ret
 .rel:
+    cmp word [ehdr + E_TYPE], ET_REL
+    jne .rel_linked
+    mov rax, [d_cur]
+    sub rax, [d_start]
+    add rax, [d_vaddr]
+    movzx ecx, byte [d_imm_size]
+    sub rax, rcx
+    call lookup_disasm_relocation
+    test rsi, rsi
+    jz .rel_linked
+    push rsi
+    PRINT dis_sym_open
+    pop rsi
+    call print_cstr
+    PRINT dis_sym_close
+    PRINT dis_reloc_open
+    mov eax, [reloc_cache_match_type]
+    call relocation_type_name
+    mov rsi, rax
+    call print_cstr
+    PRINT dis_reloc_close
+    ret
+.rel_linked:
     mov rax, [d_cur]
     sub rax, [d_start]
     add rax, [d_vaddr]
