@@ -69,7 +69,7 @@ opcodes). The decoder covers common x86-64 integer instructions and selected SSE
 operations. AVX and other unknown opcode bytes fall back to `.byte` one at a time,
 so instruction boundaries may be lost after an unsupported encoding. For linked
 executables, direct branch targets are annotated when they exactly match a function symbol;
-for relocatable `.o` files, PC-relative branch relocations show their symbol and relocation type.
+for relocatable `.o` files, PC-relative branch and RIP-relative data relocations show their symbol and type.
 
 ```bash
 ./elfcheck --disasm <file>   # or: ./elfcheck -d <file>

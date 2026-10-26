@@ -222,7 +222,15 @@ fi
 if command -v gcc >/dev/null 2>&1; then
     cat > "$TMP/relocs.c" <<'EOF'
 extern int elfcheck_reloc_target(int);
+extern int elfcheck_reloc_data;
 int elfcheck_reloc_fixture(int value) { return elfcheck_reloc_target(value) + 3; }
+int elfcheck_reloc_read(void) { return elfcheck_reloc_data; }
+int *elfcheck_reloc_address(void) {
+    int *address;
+    __asm__ volatile ("lea elfcheck_reloc_data(%%rip), %0" : "=r" (address));
+    return address;
+}
+void elfcheck_reloc_write(void) { elfcheck_reloc_data = 7; }
 EOF
     if gcc -c -fno-pic -o "$TMP/relocs.o" "$TMP/relocs.c" 2>/dev/null; then
         out="$("$BIN" --relocs "$TMP/relocs.o" 2>&1)"; code=$?
@@ -235,9 +243,29 @@ EOF
 
         out="$("$BIN" --function elfcheck_reloc_fixture "$TMP/relocs.o" 2>&1)"; code=$?
         check "ET_REL branch resolves its relocation symbol and type" 0 "$code" "<elfcheck_reloc_target> [R_X86_64_PLT32]" "$out"
+        out="$("$BIN" --function elfcheck_reloc_read "$TMP/relocs.o" 2>&1)"; code=$?
+        check "ET_REL RIP-relative data read resolves relocation" 0 "$code" "[rip+elfcheck_reloc_data] [R_X86_64_PC32]" "$out"
+        out="$("$BIN" --function elfcheck_reloc_address "$TMP/relocs.o" 2>&1)"; code=$?
+        check "ET_REL RIP-relative data address resolves relocation" 0 "$code" "[rip+elfcheck_reloc_data] [R_X86_64_PC32]" "$out"
+        out="$("$BIN" --function elfcheck_reloc_write "$TMP/relocs.o" 2>&1)"; code=$?
+        check "ET_REL RIP-relative immediate store resolves displacement field" 0 "$code" "[rip+elfcheck_reloc_data] [R_X86_64_PC32], 0x7" "$out"
 
         out="$("$BIN" --disasm "$TMP/relocs.o" 2>&1)"; code=$?
         check "ET_REL full-section disassembly resolves relocation target" 0 "$code" "<elfcheck_reloc_target> [R_X86_64_PLT32]" "$out"
+
+        cat > "$TMP/relocs-pic.c" <<'EOF'
+extern int elfcheck_reloc_data;
+int elfcheck_reloc_pic_read(void) { return elfcheck_reloc_data; }
+EOF
+        if gcc -c -fPIC -o "$TMP/relocs-pic.o" "$TMP/relocs-pic.c" 2>/dev/null; then
+            out="$("$BIN" --function elfcheck_reloc_pic_read "$TMP/relocs-pic.o" 2>&1)"; code=$?
+            check "ET_REL PIC data reference resolves a GOT relocation" 0 "$code" "[rip+elfcheck_reloc_data] [" "$out"
+            case "$out" in
+                *"[R_X86_64_GOTPCREL]"*|*"[R_X86_64_GOTPCRELX]"*|*"[R_X86_64_REX_GOTPCRELX]"*) got_code=0 ;;
+                *) got_code=1 ;;
+            esac
+            check "ET_REL PIC data reference names its GOT relocation type" 0 "$got_code" "R_X86_64_" "$out"
+        fi
 
         out="$("$BIN" "$TMP/relocs.o" --relocs 2>&1)"; code=$?
         check "--relocs accepted after path"           0 "$code" "Relocations:" "$out"
@@ -274,8 +302,14 @@ n = struct.unpack_from('<H', d, 60)[0]
 for i in range(n):
     at = off + i * es
     if struct.unpack_from('<I', d, at + 4)[0] == 4:
+        rel_off, rel_size = struct.unpack_from('<QQ', d, at + 24)
+        rel_entsize = struct.unpack_from('<Q', d, at + 56)[0]
+        count = rel_size // rel_entsize
+        records = [bytes(d[rel_off + i * rel_entsize:rel_off + i * rel_entsize + 16]) for i in range(count)]
+        for i, record in enumerate(records):
+            d[rel_off + i * 16:rel_off + (i + 1) * 16] = record
         struct.pack_into('<I', d, at + 4, 9)
-        struct.pack_into('<Q', d, at + 32, 16)
+        struct.pack_into('<Q', d, at + 32, count * 16)
         struct.pack_into('<Q', d, at + 56, 16)
         break
 open(p, 'wb').write(d)
@@ -285,6 +319,8 @@ PY
             check "REL entries omit the addend" 0 "$code" "elfcheck_reloc_target" "$out"
             out="$("$BIN" --function elfcheck_reloc_fixture "$TMP/rel.o" 2>&1)"; code=$?
             check "ET_REL SHT_REL branch resolves its symbol and type" 0 "$code" "<elfcheck_reloc_target> [R_X86_64_PLT32]" "$out"
+            out="$("$BIN" --function elfcheck_reloc_read "$TMP/rel.o" 2>&1)"; code=$?
+            check "ET_REL SHT_REL data reference resolves its symbol and type" 0 "$code" "[rip+elfcheck_reloc_data] [R_X86_64_PC32]" "$out"
             out="$("$BIN" --json "$TMP/rel.o" 2>&1)"; code=$?
             check "JSON REL addend is null" 0 "$code" '"addend":null' "$out"
 

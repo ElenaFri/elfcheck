@@ -5461,6 +5461,12 @@ build_disasm_relocation_cache:
     cmp edx, 4                   ; R_X86_64_PLT32
     je .bdrc_supported_type
     cmp edx, 15                  ; R_X86_64_PC8
+    je .bdrc_supported_type
+    cmp edx, 9                   ; R_X86_64_GOTPCREL
+    je .bdrc_supported_type
+    cmp edx, 41                  ; R_X86_64_GOTPCRELX
+    je .bdrc_supported_type
+    cmp edx, 42                  ; R_X86_64_REX_GOTPCRELX
     jne .bdrc_entry_next
 .bdrc_supported_type:
     shr rax, 32
@@ -6050,6 +6056,24 @@ emit_rm:
     cmp byte [d_riprel], 1
     jne .notrip
     PRINT dis_rip
+    cmp word [ehdr + E_TYPE], ET_REL
+    jne .rip_disp
+    mov rax, [d_cur]
+    sub rax, [d_start]
+    add rax, [d_vaddr]
+    movzx ecx, byte [d_imm_size]
+    sub rax, rcx
+    movzx ecx, byte [d_disp_size]
+    sub rax, rcx
+    call lookup_disasm_relocation
+    test rsi, rsi
+    jz .rip_disp
+    push rsi
+    PRINT dis_plus
+    pop rsi
+    call print_cstr
+    jmp .close_reloc
+.rip_disp:
     call emit_disp_signed
     jmp .close
 .notrip:
@@ -6096,6 +6120,15 @@ emit_rm:
     call print_hex
 .close:
     PRINT dis_rbr
+    ret
+.close_reloc:
+    PRINT dis_rbr
+    PRINT dis_reloc_open
+    mov eax, [reloc_cache_match_type]
+    call relocation_type_name
+    mov rsi, rax
+    call print_cstr
+    PRINT dis_reloc_close
     ret
 
 emit_imm:
