@@ -19,6 +19,9 @@ jobs:
       - name: Build, test, and generate coverage
         run: make coverage
 
+      - name: Run deterministic fuzz smoke tests
+        run: make fuzz-smoke
+
       - name: Verify assembly coverage report
         run: |
           python3 - <<'PY'
