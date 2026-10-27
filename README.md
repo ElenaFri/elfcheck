@@ -31,7 +31,7 @@ A lightweight ELF64 inspector for Linux x86-64, written in NASM. It accepts ELF6
 
 - Linux x86-64
 - NASM
-- GNU Binutils (`ld` and `strip`)
+- GNU Binutils (`ld`, `strip` and `readelf`)
 - GNU Make
 - GCC and Python 3 for the full test suite
 
@@ -52,6 +52,8 @@ Run the test suite:
 ```bash
 make test
 ```
+
+The suite also compares ELF headers, segments and sections against GNU `readelf`.
 
 Measure NASM source-line coverage with `kcov` (the HTML report is written to
 `coverage/index.html`):

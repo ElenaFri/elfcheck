@@ -794,6 +794,28 @@ out="$("$RUN_BIN" "$BIN" 2>&1)"; code=$?
 check "default shows header"              0 "$code" "$ELF_HEADER_HEADING" "$out"
 check "default shows hardening"           0 "$code" "$HARDENING_HEADING"  "$out"
 
+# 15. Compare parsed header and tables against GNU readelf output.
+if command -v python3 >/dev/null 2>&1 && command -v readelf >/dev/null 2>&1; then
+    compare_files=("$BIN")
+    if command -v gcc >/dev/null 2>&1 && [[ -r "$TMP/symbols.c" ]] &&
+        gcc -fPIE -pie -g -O0 -o "$TMP/readelf-pie.elf" "$TMP/symbols.c" 2>/dev/null; then
+        compare_files+=("$TMP/readelf-pie.elf")
+        if command -v strip >/dev/null 2>&1; then
+            cp "$TMP/readelf-pie.elf" "$TMP/readelf-pie-stripped.elf"
+            if strip --strip-all "$TMP/readelf-pie-stripped.elf" 2>/dev/null; then
+                compare_files+=("$TMP/readelf-pie-stripped.elf")
+            fi
+        fi
+    fi
+    for candidate in /bin/sh /bin/ls "$TMP/symbols.elf" "$TMP/symbols.stripped.elf" "$TMP/functions.exec"; do
+        [[ -r "$candidate" ]] && compare_files+=("$candidate")
+    done
+    out="$(python3 "$ROOT/tests/compare_readelf.py" "$RUN_BIN" "${compare_files[@]}" 2>&1)"; code=$?
+    check "readelf semantic comparisons pass" 0 "${code}" "readelf differential: all ${#compare_files[@]} files matched" "$out"
+else
+    echo "  SKIP: readelf differential tests require Python 3 and GNU readelf"
+fi
+
 echo
 echo "Results: $pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]
