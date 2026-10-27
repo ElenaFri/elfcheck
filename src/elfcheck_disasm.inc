@@ -1049,8 +1049,8 @@ reset_decode_state:
 
 ; cur_opnd_size - out: cl = operand size in bytes.
 cur_opnd_size:
-    cmp byte [d_vec], 1
-    je .vector
+    cmp byte [d_vec], 0
+    jne .vector
     cmp byte [d_byte], 1
     je .s1
     test byte [d_rex], 8       ; REX.W
@@ -1078,9 +1078,15 @@ cur_opnd_size:
 emit_reg:
     push rbx
     movzx ebx, al
+    cmp byte [d_vec], 0
+    je .gpr
     cmp byte [d_vec], 1
-    jne .gpr
+    jne .ymm
     lea rax, [regs_xmm]
+    mov rsi, [rax + rbx*8]
+    jmp .out
+.ymm:
+    lea rax, [regs_ymm]
     mov rsi, [rax + rbx*8]
     jmp .out
 .gpr:
@@ -1119,13 +1125,16 @@ emit_reg:
     pop rbx
     ret
 
-; emit_addr_reg - emit a GPR used as a memory base/index, even for XMM ops.
+; emit_addr_reg - emit a GPR used as a memory base/index, even for vector ops.
 emit_addr_reg:
-    cmp byte [d_vec], 1
-    jne .gpr
+    cmp byte [d_vec], 0
+    je .gpr
+    mov dl, [d_vec]
     mov byte [d_vec], 0
+    push rdx
     call emit_reg
-    mov byte [d_vec], 1
+    pop rdx
+    mov [d_vec], dl
     ret
 .gpr:
     jmp emit_reg
@@ -1165,6 +1174,8 @@ emit_rm:
     je .k2
     cmp al, 16
     je .k4
+    cmp al, 32
+    je .k5
     mov edx, 3
     jmp .kk
 .k0:
@@ -1178,6 +1189,9 @@ emit_rm:
     jmp .kk
 .k4:
     mov edx, 4
+    jmp .kk
+.k5:
+    mov edx, 5
 .kk:
     lea rax, [sz_tbl]
     mov rsi, [rax + rdx*8]
@@ -2413,7 +2427,7 @@ decode_one_byte:
     ret
 
 ; decode_vex_payload - in dl = VEX byte containing vvvv/L/pp.
-; Converts the inverted register field and accepts only 128-bit encodings.
+; Converts the inverted register field and records the vector length.
 decode_vex_payload:
     mov byte [d_style], 0xff
     cmp byte [d_trunc], 1
@@ -2423,8 +2437,10 @@ decode_vex_payload:
     and al, 0x0f
     xor al, 0x0f
     mov [d_vvvv], al
-    test dl, 4
-    jnz .done                    ; 256-bit YMM is not yet supported
+    mov al, dl
+    and al, 4
+    shr al, 2
+    mov [d_vex_l], al
     and dl, 3
     mov [d_vex_pp], dl
     mov byte [d_style], ST_NONE
@@ -2439,6 +2455,8 @@ decode_vex:
     jne .packed
     cmp byte [d_vex_pp], 0
     jne .unknown
+    cmp byte [d_vex_l], 0
+    jne .unknown                 ; VEX.L=1 selects unsupported vzeroall
     cmp byte [d_vvvv], 0        ; reserved VEX.vvvv must be encoded as 1111
     jne .unknown
     lea rsi, [mn_vzeroupper]
@@ -2473,12 +2491,23 @@ decode_vex:
     mov rsi, [rax + rcx*8]
     test rsi, rsi
     jz .unknown
+    cmp byte [d_vex_pp], 2
+    jae .scalar
     mov [d_mnem], rsi
     mov byte [d_style], ST_VEC3
     mov byte [d_vec], 1
     mov byte [d_vec_size], 16
-    cmp byte [d_vex_pp], 2
-    jb .decode_operands
+    cmp byte [d_vex_l], 0
+    je .decode_operands
+    mov byte [d_vec], 2
+    mov byte [d_vec_size], 32
+    jmp .decode_operands
+.scalar:
+    cmp byte [d_vex_l], 0
+    jne .unknown                 ; scalar forms require VEX.L=0
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_VEC3
+    mov byte [d_vec], 1
     mov byte [d_vec_size], 4
     cmp byte [d_vex_pp], 3
     jne .decode_operands

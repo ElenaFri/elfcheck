@@ -524,6 +524,10 @@ elfcheck_vex_fixture:
     vmaxps xmm0, xmm1, xmm2
     vmaxsd xmm3, xmm4, xmm5
     vaddps xmm8, xmm9, xmm10
+    vaddps ymm0, ymm1, ymm2
+    vaddpd ymm3, ymm4, ymm5
+    vandps ymm8, ymm9, ymm10
+    vaddps ymm8, ymm9, ymm10
     vzeroupper
     ret
 .end:
@@ -531,12 +535,19 @@ elfcheck_vex_fixture:
 global elfcheck_vex_memory:function (elfcheck_vex_memory.end - elfcheck_vex_memory)
 elfcheck_vex_memory:
     vaddps xmm0, xmm1, [r8 + r9*4 + 16]
+    vaddps ymm0, ymm1, [r8 + r9*4 + 32]
     ret
 .end:
 
-global elfcheck_vex_unsupported:function (elfcheck_vex_unsupported.end - elfcheck_vex_unsupported)
-elfcheck_vex_unsupported:
-    db 0xc5, 0xfc, 0x58, 0xc2
+global elfcheck_evex_unsupported:function (elfcheck_evex_unsupported.end - elfcheck_evex_unsupported)
+elfcheck_evex_unsupported:
+    db 0x62, 0xf1, 0x7c, 0x48, 0x58, 0xc2
+    ret
+.end:
+
+global elfcheck_vex_scalar_l_unsupported:function (elfcheck_vex_scalar_l_unsupported.end - elfcheck_vex_scalar_l_unsupported)
+elfcheck_vex_scalar_l_unsupported:
+    db 0xc5, 0xf6, 0x58, 0xc2
     ret
 .end:
 
@@ -550,6 +561,8 @@ EOF
         check "VEX decodes packed and scalar 128-bit arithmetic" 0 "$code" "vaddss" "$out"
         check "VEX decodes the inverted vvvv register field" 0 "$code" "xmm0, xmm1, xmm2" "$out"
         check "VEX C4 decodes extended XMM registers" 0 "$code" "xmm8, xmm9, xmm10" "$out"
+        check "VEX.L=1 decodes 256-bit YMM registers" 0 "$code" "ymm0, ymm1, ymm2" "$out"
+        check "VEX.L=1 decodes extended YMM registers" 0 "$code" "ymm8, ymm9, ymm10" "$out"
         check "VEX decodes vzeroupper" 0 "$code" "vzeroupper" "$out"
 
         printf '%s\n' "$out" > "$TMP/elfcheck-vex.out"
@@ -584,9 +597,13 @@ PY
 
         out="$("$RUN_BIN" --function elfcheck_vex_memory "$TMP/vex.o" 2>&1)"; code=$?
         check "VEX C4 decodes extended memory base and index" 0 "$code" "[r8+r9*4+0x10]" "$out"
+        check "256-bit VEX marks 32-byte memory operands" 0 "$code" "ymmword [r8+r9*4+0x20]" "$out"
 
-        out="$("$RUN_BIN" --function elfcheck_vex_unsupported "$TMP/vex.o" 2>&1)"; code=$?
-        check "unsupported 256-bit VEX keeps byte fallback" 0 "$code" ".byte 0xc5" "$out"
+        out="$("$RUN_BIN" --function elfcheck_evex_unsupported "$TMP/vex.o" 2>&1)"; code=$?
+        check "EVEX remains on byte fallback" 0 "$code" ".byte 0x62" "$out"
+
+        out="$("$RUN_BIN" --function elfcheck_vex_scalar_l_unsupported "$TMP/vex.o" 2>&1)"; code=$?
+        check "scalar VEX.L=1 remains on byte fallback" 0 "$code" ".byte 0xc5" "$out"
 
         out="$("$RUN_BIN" --function elfcheck_vex_truncated "$TMP/vex.o" 2>&1)"; code=$?
         check "truncated VEX prefix safely falls back to one byte" 0 "$code" ".byte 0xc5" "$out"

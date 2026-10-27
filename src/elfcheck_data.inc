@@ -454,7 +454,8 @@ section .rodata
     sz_dword:       db "dword ", 0
     sz_qword:       db "qword ", 0
     sz_xmmword:     db "xmmword ", 0
-    sz_tbl:         dq sz_byte, sz_word, sz_dword, sz_qword, sz_xmmword
+    sz_ymmword:     db "ymmword ", 0
+    sz_tbl:         dq sz_byte, sz_word, sz_dword, sz_qword, sz_xmmword, sz_ymmword
 
     ; general-purpose register names
     r64_0:  db "rax",0
@@ -532,6 +533,25 @@ section .rodata
     xmm_15: db "xmm15",0
     regs_xmm: dq xmm_0,xmm_1,xmm_2,xmm_3,xmm_4,xmm_5,xmm_6,xmm_7
               dq xmm_8,xmm_9,xmm_10,xmm_11,xmm_12,xmm_13,xmm_14,xmm_15
+
+    ymm_0:  db "ymm0",0
+    ymm_1:  db "ymm1",0
+    ymm_2:  db "ymm2",0
+    ymm_3:  db "ymm3",0
+    ymm_4:  db "ymm4",0
+    ymm_5:  db "ymm5",0
+    ymm_6:  db "ymm6",0
+    ymm_7:  db "ymm7",0
+    ymm_8:  db "ymm8",0
+    ymm_9:  db "ymm9",0
+    ymm_10: db "ymm10",0
+    ymm_11: db "ymm11",0
+    ymm_12: db "ymm12",0
+    ymm_13: db "ymm13",0
+    ymm_14: db "ymm14",0
+    ymm_15: db "ymm15",0
+    regs_ymm: dq ymm_0,ymm_1,ymm_2,ymm_3,ymm_4,ymm_5,ymm_6,ymm_7
+              dq ymm_8,ymm_9,ymm_10,ymm_11,ymm_12,ymm_13,ymm_14,ymm_15
 
     r8_0:   db "al",0
     r8_1:   db "cl",0
@@ -951,11 +971,12 @@ section .bss
     d_op:           resb 1             ; primary opcode byte
     d_vex_map:      resb 1             ; VEX opcode map
     d_vex_pp:       resb 1             ; VEX mandatory-prefix selector
+    d_vex_l:        resb 1             ; VEX vector length (0=128, 1=256)
     d_vvvv:         resb 1             ; decoded VEX.vvvv register index
     d_style:        resb 1             ; operand rendering style (0xff = unknown)
     d_srcsz:        resb 1             ; source size for movzx/movsx
-    d_vec:          resb 1             ; 1 = XMM register operands
-    d_vec_size:     resb 1             ; XMM memory operand width in bytes
+    d_vec:          resb 1             ; 0 = GPR, 1 = XMM, 2 = YMM
+    d_vec_size:     resb 1             ; vector/memory operand width in bytes
     d_trunc:        resb 1             ; ran off the end mid-instruction
     first_printed:  resb 1             ; helper for memory-operand rendering
     d_disp:         resq 1             ; sign-extended displacement
