@@ -282,6 +282,21 @@ EOF
         check "--symbols resolves a defined name"  0 "$code" "elfcheck_symbol_fixture" "$out"
         check "--symbols prints type and binding"  0 "$code" "FUNC" "$out"
 
+        cat > "$TMP/versioned.c" <<'EOF'
+int elfcheck_versioned_api(void) { return 42; }
+EOF
+        cat > "$TMP/versioned.map" <<'EOF'
+ELFCHECK_1.0 { global: elfcheck_versioned_api; local: *; };
+EOF
+        if gcc -shared -fPIC -Wl,--version-script="$TMP/versioned.map" -o "$TMP/libversioned.so" "$TMP/versioned.c" 2>/dev/null; then
+            out="$("$RUN_BIN" --symbols "$TMP/libversioned.so" 2>&1)"; code=$?
+            check "--symbols prints default GNU version" 0 "$code" "elfcheck_versioned_api@@ELFCHECK_1.0" "$out"
+            out="$("$RUN_BIN" --json "$TMP/libversioned.so" 2>&1)"; code=$?
+            printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); s=[x for t in d["symbol_tables"] if t["name"]==".dynsym" for x in t["symbols"] if x["name"]=="elfcheck_versioned_api"]; assert len(s)==1 and s[0]["version"]["kind"]=="defined" and s[0]["version"]["name"]=="ELFCHECK_1.0" and s[0]["version"]["library"] is None and s[0]["version"]["hidden"] is False'
+            pcode=$?
+            check "JSON exposes a defined GNU symbol version" 0 "$pcode" "" ""
+        fi
+
         out="$("$RUN_BIN" "$TMP/symbols.elf" --symbols 2>&1)"; code=$?
         check "--symbols accepted after path"      0 "$code" "$SYMBOL_TABLES_HEADING" "$out"
 
@@ -704,12 +719,16 @@ if [[ -r /bin/ls ]]; then
     check "dynamic lists libc.so.6"        0 "$code" "libc.so.6"          "$out"
     check "dynamic lists imported symbols" 0 "$code" "Imported symbols:"  "$out"
     check "dynamic finds a known import"   0 "$code" "getenv"             "$out"
+    check "dynamic import includes GNU version" 0 "$code" "getenv@GLIBC_" "$out"
 
     out="$("$RUN_BIN" --json /bin/ls 2>&1)"; code=$?
     check "--json dynamic is not static"   0 "$code" '"static":false'      "$out"
     check "--json lists needed array"      0 "$code" '"needed":['          "$out"
     check "--json lists a needed lib"      0 "$code" '"libc.so.6"'         "$out"
     check "--json lists imports array"     0 "$code" '"imports":['         "$out"
+    printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); s=[x for t in d["symbol_tables"] if t["name"]==".dynsym" for x in t["symbols"]]; assert any(x["version"] and x["version"]["kind"]=="required" and x["version"]["library"] and x["version"]["name"].startswith("GLIBC_") for x in s)'
+    pcode=$?
+    check "JSON exposes required GNU symbol versions" 0 "$pcode" "" ""
 
     # JSON for a dynamic binary must stay well-formed
     if command -v python3 >/dev/null 2>&1; then

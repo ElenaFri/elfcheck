@@ -23,7 +23,7 @@ A lightweight ELF64 inspector for Linux x86-64, written in NASM. It accepts ELF6
 - [x] Detect potentially suspicious ELF properties
 - [x] Check segment permissions and executable stack settings
 - [x] Identify imported functions and dynamic dependencies
-- [x] Display static and dynamic symbol tables
+- [x] Display static and dynamic symbol tables, including GNU symbol versions
 - [x] Display REL/RELA relocation entries and resolve symbol names
 - [x] Generate a security-oriented analysis report
 
@@ -124,10 +124,11 @@ executability via `PT_GNU_STACK`, an entry point that falls outside any
 executable segment, and a stripped section header table. These findings are
 advisory and do not change the exit code.
 
-A `Dynamic:` section then reports dynamic linking: the shared libraries the file
-depends on (`DT_NEEDED`) and the symbols it imports (undefined `.dynsym`
-entries), or a note when the binary is statically linked. The same data appears
-under `"dynamic"` in `--json` output.
+A `Dynamic:` section reports the shared libraries the file depends on (`DT_NEEDED`)
+and imported symbols with GNU versions (`name@VERSION`); default exported
+versions use `name@@VERSION`. In `--json`, each `.dynsym` entry has a `version`
+object (or `null`) with its name, index, required/defined kind, provider library,
+and GNU hidden-version flag.
 
 Finally, a `Hardening:` section summarises the binary's exploit-mitigation
 posture, checksec-style: `RELRO` (none/partial/full), stack canary, `NX`

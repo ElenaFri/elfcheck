@@ -136,6 +136,10 @@
 ; max bytes of the dynamic string table we buffer
 %define DYNSTR_CAP  262144
 
+; GNU symbol-version sections use 15-bit version indexes.
+%define VER_MAP_COUNT 32768
+%define VERSTR_CAP    65536
+
 ; operand rendering styles for the disassembler
 %define ST_NONE     0
 %define ST_RM_REG   1          ; r/m, reg
@@ -402,6 +406,10 @@ section .rodata
     sym_hidden:     db "HIDDEN", 0
     sym_protected:  db "PROTECTED", 0
     sym_unknown:    db "UNKNOWN", 0
+    sym_version_at: db "@", 0
+    sym_version_atat: db "@@", 0
+    sym_version_required: db "required", 0
+    sym_version_defined: db "defined", 0
 
     ; ---- relocation report ----
     rel_title:      db 10, "Relocations:", 10, 0
@@ -567,6 +575,9 @@ section .rodata
     jk_symbol_tables: db 34, "symbol_tables", 34, ":", 0
     jk_symbols:     db 34, "symbols", 34, ":", 0
     jk_kind:        db 34, "kind", 34, ":", 0
+    jk_version:     db 34, "version", 34, ":", 0
+    jk_library:     db 34, "library", 34, ":", 0
+    jk_hidden:      db 34, "hidden", 34, ":", 0
     jk_entry_count: db 34, "entry_count", 34, ":", 0
     jk_value:       db 34, "value", 34, ":", 0
     jk_binding:     db 34, "binding", 34, ":", 0
@@ -898,6 +909,7 @@ section .bss
     dsym_size:      resq 1             ; .dynsym size
     dsym_ent:       resq 1             ; .dynsym entry size
     dsym_link:      resd 1             ; .dynsym sh_link (string table index)
+    dsym_index:     resd 1             ; .dynsym section index
     dyn_is_static:  resb 1             ; 1 = no .dynamic section found
     hd_interp:      resb 1             ; 1 = PT_INTERP present
     hd_stack:       resb 1             ; 0 absent / 1 noexec / 2 exec (PT_GNU_STACK)
@@ -945,6 +957,56 @@ section .bss
     sym_entry_count: resq 1
     sym_entry_index: resq 1
     sym_tables_found: resq 1
+
+    ; ---- GNU symbol versioning state ----
+    ver_ready:       resb 1
+    ver_versym_found: resb 1
+    ver_need_found:  resb 1
+    ver_def_found:   resb 1
+    ver_dynsym_found: resb 1
+    ver_versym_off:  resq 1
+    ver_versym_size: resq 1
+    ver_versym_link: resd 1
+    ver_need_off:    resq 1
+    ver_need_size:   resq 1
+    ver_need_link:   resd 1
+    ver_def_off:     resq 1
+    ver_def_size:    resq 1
+    ver_def_link:    resd 1
+    ver_dynsym_link: resd 1
+    ver_parse_off:   resq 1
+    ver_parse_size:  resq 1
+    ver_rel:         resq 1
+    ver_bytes:       resq 1
+    ver_read_off:    resq 1
+    ver_read_buf:    resq 1
+    ver_read_size:   resq 1
+    ver_record_rel:  resq 1
+    ver_aux_rel:     resq 1
+    ver_aux_count:   resd 1
+    ver_aux_index:   resd 1
+    ver_cur_index:   resd 1
+    ver_library_src: resd 1
+    ver_copied_name: resd 1
+    ver_copied_library: resd 1
+    ver_copy_start:  resq 1
+    ver_map_kind:    resb VER_MAP_COUNT
+    ver_map_name:    resd VER_MAP_COUNT
+    ver_map_library: resd VER_MAP_COUNT
+    ver_strings_len: resq 1
+    ver_strings:     resb VERSTR_CAP
+    ver_need_record: resb 16
+    ver_need_aux:    resb 16
+    ver_def_record:  resb 20
+    ver_def_aux:     resb 8
+    ver_versym_entry: resb 2
+    ver_lookup_table: resq 1
+    ver_lookup_symbol: resq 1
+    ver_lookup_index: resd 1
+    ver_lookup_kind: resb 1
+    ver_lookup_hidden: resb 1
+    ver_lookup_name_off: resd 1
+    ver_lookup_library_off: resd 1
 
     ; ---- relocation table state ----
     rel_json_mode:   resb 1
@@ -2406,6 +2468,578 @@ dynstr_name_ptr:
     ret
 
 ; ---------------------------------------------------------------------------
+; GNU symbol versions. The version map is indexed by the 15-bit Versym index;
+; names are copied out of .dynstr so later section reads cannot invalidate them.
+; ---------------------------------------------------------------------------
+prepare_symbol_versions:
+    cmp byte [ver_ready], 0
+    jne .psv_already
+    push r13
+    push r14
+    push r15
+    mov byte [ver_ready], 1
+    mov byte [ver_versym_found], 0
+    mov byte [ver_need_found], 0
+    mov byte [ver_def_found], 0
+    mov byte [ver_dynsym_found], 0
+    mov qword [ver_strings_len], 0
+    lea rdi, [ver_map_kind]
+    xor eax, eax
+    mov ecx, VER_MAP_COUNT
+    cld
+    rep stosb
+
+    mov rdi, r12
+    xor esi, esi
+    mov edx, SEEK_END
+    mov eax, SYS_LSEEK
+    syscall
+    test rax, rax
+    js .psv_done
+    mov [filesize], rax
+
+    movzx r14d, word [ehdr + E_SHNUM]
+    test r14, r14
+    jz .psv_done
+    movzx r15d, word [ehdr + E_SHENTSIZE]
+    cmp r15d, SHDR_SIZE
+    jb .psv_done
+    mov rax, r14
+    mov rcx, r15
+    mul rcx
+    test rdx, rdx
+    jnz .psv_done
+    add rax, [ehdr + E_SHOFF]
+    jc .psv_done
+    cmp rax, [filesize]
+    ja .psv_done
+
+    xor r13, r13
+.psv_scan:
+    cmp r13, r14
+    jae .psv_parse
+    mov rax, r13
+    imul rax, r15
+    add rax, [ehdr + E_SHOFF]
+    jc .psv_parse
+    mov rdi, r12
+    mov rsi, rax
+    xor edx, edx
+    mov eax, SYS_LSEEK
+    syscall
+    test rax, rax
+    js .psv_parse
+    mov rdi, r12
+    lea rsi, [shdr]
+    mov edx, SHDR_SIZE
+    xor eax, eax
+    syscall
+    cmp rax, SHDR_SIZE
+    jne .psv_parse
+
+    mov eax, dword [shdr + SH_TYPE]
+    cmp eax, 11                 ; SHT_DYNSYM
+    jne .psv_check_versym
+    cmp byte [ver_dynsym_found], 0
+    jne .psv_check_versym
+    mov byte [ver_dynsym_found], 1
+    mov eax, dword [shdr + SH_LINK]
+    mov [ver_dynsym_link], eax
+.psv_check_versym:
+    cmp eax, 0x6fffffff         ; SHT_GNU_versym
+    jne .psv_check_need
+    cmp byte [ver_versym_found], 0
+    jne .psv_check_need
+    mov byte [ver_versym_found], 1
+    mov rax, [shdr + SH_OFFSET]
+    mov [ver_versym_off], rax
+    mov rax, [shdr + SH_SIZE]
+    mov [ver_versym_size], rax
+    mov eax, dword [shdr + SH_LINK]
+    mov [ver_versym_link], eax
+    jmp .psv_next
+.psv_check_need:
+    cmp eax, 0x6ffffffe         ; SHT_GNU_verneed
+    jne .psv_check_def
+    cmp byte [ver_need_found], 0
+    jne .psv_check_def
+    mov byte [ver_need_found], 1
+    mov rax, [shdr + SH_OFFSET]
+    mov [ver_need_off], rax
+    mov rax, [shdr + SH_SIZE]
+    mov [ver_need_size], rax
+    mov eax, dword [shdr + SH_LINK]
+    mov [ver_need_link], eax
+    jmp .psv_next
+.psv_check_def:
+    cmp eax, 0x6ffffffd         ; SHT_GNU_verdef
+    jne .psv_next
+    cmp byte [ver_def_found], 0
+    jne .psv_next
+    mov byte [ver_def_found], 1
+    mov rax, [shdr + SH_OFFSET]
+    mov [ver_def_off], rax
+    mov rax, [shdr + SH_SIZE]
+    mov [ver_def_size], rax
+    mov eax, dword [shdr + SH_LINK]
+    mov [ver_def_link], eax
+.psv_next:
+    inc r13
+    jmp .psv_scan
+.psv_parse:
+    cmp byte [ver_need_found], 0
+    je .psv_def
+    call parse_version_needs
+.psv_def:
+    cmp byte [ver_def_found], 0
+    je .psv_restore
+    call parse_version_definitions
+.psv_restore:
+    cmp byte [ver_dynsym_found], 0
+    je .psv_done
+    mov eax, [ver_dynsym_link]
+    call load_dynstr
+.psv_done:
+    pop r15
+    pop r14
+    pop r13
+.psv_already:
+    ret
+
+; Bounds-check [ver_rel, ver_rel + ver_bytes) in the current version section.
+version_range_ok:
+    mov rax, [ver_rel]
+    add rax, [ver_bytes]
+    jc .vro_no
+    cmp rax, [ver_parse_size]
+    ja .vro_no
+    mov rdx, [ver_parse_off]
+    add rdx, [ver_rel]
+    jc .vro_no
+    add rdx, [ver_bytes]
+    jc .vro_no
+    cmp rdx, [filesize]
+    ja .vro_no
+    mov eax, 1
+    ret
+.vro_no:
+    xor eax, eax
+    ret
+
+; Read rdx bytes at rax into rsi. Returns eax=1 only for a complete read.
+read_version_at:
+    mov [ver_read_off], rax
+    mov [ver_read_buf], rsi
+    mov [ver_read_size], rdx
+    mov rdi, r12
+    mov rsi, rax
+    xor edx, edx
+    mov eax, SYS_LSEEK
+    syscall
+    test rax, rax
+    js .rva_no
+    mov rdi, r12
+    mov rsi, [ver_read_buf]
+    mov rdx, [ver_read_size]
+    xor eax, eax
+    syscall
+    cmp rax, [ver_read_size]
+    jne .rva_no
+    mov eax, 1
+    ret
+.rva_no:
+    xor eax, eax
+    ret
+
+; Copy an offset in dynstr into the stable version-string buffer. In: eax offset.
+; Out: rax copied offset, or -1 if either buffer cannot hold the string.
+copy_version_string:
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    mov ebx, eax
+    cmp rbx, [dynstr_len]
+    jae .cvs_bad
+    mov rdx, [ver_strings_len]
+    cmp rdx, VERSTR_CAP
+    jae .cvs_bad
+    mov [ver_copy_start], rdx
+    lea rsi, [rel dynstr]
+    add rsi, rbx
+    lea rdi, [rel ver_strings]
+    add rdi, rdx
+.cvs_loop:
+    cmp rdx, VERSTR_CAP
+    jae .cvs_bad
+    mov al, [rsi]
+    mov [rdi], al
+    inc rsi
+    inc rdi
+    inc rdx
+    test al, al
+    jz .cvs_done
+    jmp .cvs_loop
+.cvs_done:
+    mov [ver_strings_len], rdx
+    mov rax, [ver_copy_start]
+    jmp .cvs_out
+.cvs_bad:
+    mov rax, -1
+.cvs_out:
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    ret
+
+parse_version_needs:
+    push rbx
+    push r13
+    push r14
+    mov eax, [ver_need_link]
+    test eax, eax
+    jz .pvn_done
+    movzx ecx, word [ehdr + E_SHNUM]
+    cmp eax, ecx
+    jae .pvn_done
+    call load_dynstr
+    cmp dword [shdr + SH_TYPE], 3 ; SHT_STRTAB
+    jne .pvn_done
+    mov rax, [ver_need_off]
+    mov [ver_parse_off], rax
+    mov rax, [ver_need_size]
+    mov [ver_parse_size], rax
+    mov qword [ver_record_rel], 0
+.pvn_record:
+    mov rax, [ver_record_rel]
+    mov [ver_rel], rax
+    mov qword [ver_bytes], 16
+    call version_range_ok
+    test eax, eax
+    jz .pvn_done
+    mov rax, [ver_parse_off]
+    add rax, [ver_record_rel]
+    jc .pvn_done
+    lea rsi, [ver_need_record]
+    mov edx, 16
+    call read_version_at
+    test eax, eax
+    jz .pvn_done
+
+    movzx eax, word [ver_need_record + 2]
+    mov [ver_aux_count], eax
+    mov eax, dword [ver_need_record + 4]
+    mov [ver_library_src], eax
+    mov eax, dword [ver_need_record + 8]
+    test eax, eax
+    jz .pvn_next_record
+    add rax, [ver_record_rel]
+    jc .pvn_next_record
+    mov [ver_aux_rel], rax
+    mov dword [ver_aux_index], 0
+.pvn_aux:
+    mov eax, [ver_aux_index]
+    cmp eax, [ver_aux_count]
+    jae .pvn_next_record
+    mov rax, [ver_aux_rel]
+    mov [ver_rel], rax
+    mov qword [ver_bytes], 16
+    call version_range_ok
+    test eax, eax
+    jz .pvn_next_record
+    mov rax, [ver_parse_off]
+    add rax, [ver_aux_rel]
+    jc .pvn_next_record
+    lea rsi, [ver_need_aux]
+    mov edx, 16
+    call read_version_at
+    test eax, eax
+    jz .pvn_next_record
+
+    movzx eax, word [ver_need_aux + 6]
+    and eax, 0x7fff
+    cmp eax, 2
+    jb .pvn_aux_next
+    mov [ver_cur_index], eax
+    mov eax, dword [ver_need_aux + 8]
+    call copy_version_string
+    cmp rax, -1
+    je .pvn_aux_next
+    mov [ver_copied_name], eax
+    mov eax, [ver_library_src]
+    call copy_version_string
+    cmp rax, -1
+    je .pvn_aux_next
+    mov [ver_copied_library], eax
+    mov eax, [ver_cur_index]
+    lea rdi, [rel ver_map_kind]
+    mov byte [rdi + rax], 1
+    mov edx, [ver_cur_index]
+    shl rdx, 2
+    mov eax, [ver_copied_name]
+    lea rdi, [rel ver_map_name]
+    mov [rdi + rdx], eax
+    mov eax, [ver_copied_library]
+    lea rdi, [rel ver_map_library]
+    mov [rdi + rdx], eax
+.pvn_aux_next:
+    inc dword [ver_aux_index]
+    mov eax, dword [ver_need_aux + 12]
+    test eax, eax
+    jz .pvn_next_record
+    add [ver_aux_rel], rax
+    jc .pvn_next_record
+    jmp .pvn_aux
+.pvn_next_record:
+    mov eax, dword [ver_need_record + 12]
+    test eax, eax
+    jz .pvn_done
+    add [ver_record_rel], rax
+    jc .pvn_done
+    jmp .pvn_record
+.pvn_done:
+    pop r14
+    pop r13
+    pop rbx
+    ret
+
+parse_version_definitions:
+    push rbx
+    push r13
+    push r14
+    mov eax, [ver_def_link]
+    test eax, eax
+    jz .pvd_done
+    movzx ecx, word [ehdr + E_SHNUM]
+    cmp eax, ecx
+    jae .pvd_done
+    call load_dynstr
+    cmp dword [shdr + SH_TYPE], 3 ; SHT_STRTAB
+    jne .pvd_done
+    mov rax, [ver_def_off]
+    mov [ver_parse_off], rax
+    mov rax, [ver_def_size]
+    mov [ver_parse_size], rax
+    mov qword [ver_record_rel], 0
+.pvd_record:
+    mov rax, [ver_record_rel]
+    mov [ver_rel], rax
+    mov qword [ver_bytes], 20
+    call version_range_ok
+    test eax, eax
+    jz .pvd_done
+    mov rax, [ver_parse_off]
+    add rax, [ver_record_rel]
+    jc .pvd_done
+    lea rsi, [ver_def_record]
+    mov edx, 20
+    call read_version_at
+    test eax, eax
+    jz .pvd_done
+
+    movzx eax, word [ver_def_record + 6]
+    test eax, eax
+    jz .pvd_next_record
+    movzx eax, word [ver_def_record + 4]
+    and eax, 0x7fff
+    cmp eax, 2
+    jb .pvd_next_record
+    mov [ver_cur_index], eax
+    mov eax, dword [ver_def_record + 12]
+    test eax, eax
+    jz .pvd_next_record
+    add rax, [ver_record_rel]
+    jc .pvd_next_record
+    mov [ver_aux_rel], rax
+    mov rax, [ver_aux_rel]
+    mov [ver_rel], rax
+    mov qword [ver_bytes], 8
+    call version_range_ok
+    test eax, eax
+    jz .pvd_next_record
+    mov rax, [ver_parse_off]
+    add rax, [ver_aux_rel]
+    jc .pvd_next_record
+    lea rsi, [ver_def_aux]
+    mov edx, 8
+    call read_version_at
+    test eax, eax
+    jz .pvd_next_record
+    mov eax, dword [ver_def_aux]
+    call copy_version_string
+    cmp rax, -1
+    je .pvd_next_record
+    mov [ver_copied_name], eax
+    mov eax, [ver_cur_index]
+    lea rdi, [rel ver_map_kind]
+    mov byte [rdi + rax], 2
+    mov edx, [ver_cur_index]
+    shl rdx, 2
+    mov eax, [ver_copied_name]
+    lea rdi, [rel ver_map_name]
+    mov [rdi + rdx], eax
+    lea rdi, [rel ver_map_library]
+    mov dword [rdi + rdx], 0
+.pvd_next_record:
+    mov eax, dword [ver_def_record + 16]
+    test eax, eax
+    jz .pvd_done
+    add [ver_record_rel], rax
+    jc .pvd_done
+    jmp .pvd_record
+.pvd_done:
+    pop r14
+    pop r13
+    pop rbx
+    ret
+
+; In: rdi = symbol-table section index, rsi = symbol index.
+; Returns version data in the ver_lookup_* fields; kind 1=required, 2=defined.
+lookup_symbol_version:
+    mov [ver_lookup_table], rdi
+    mov [ver_lookup_symbol], rsi
+    mov dword [ver_lookup_index], 0
+    mov byte [ver_lookup_kind], 0
+    mov byte [ver_lookup_hidden], 0
+    mov dword [ver_lookup_name_off], 0
+    mov dword [ver_lookup_library_off], 0
+    call prepare_symbol_versions
+    cmp byte [ver_versym_found], 0
+    je .lsv_done
+    mov eax, [ver_versym_link]
+    cmp rax, [ver_lookup_table]
+    jne .lsv_done
+    mov rax, [ver_lookup_symbol]
+    shl rax, 1
+    jc .lsv_done
+    mov rcx, rax
+    add rcx, 2
+    jc .lsv_done
+    cmp rcx, [ver_versym_size]
+    ja .lsv_done
+    mov rdx, [ver_versym_off]
+    add rdx, rax
+    jc .lsv_done
+    mov rcx, rdx
+    add rcx, 2
+    jc .lsv_done
+    cmp rcx, [filesize]
+    ja .lsv_done
+    lea rsi, [ver_versym_entry]
+    mov edx, 2
+    mov rax, [ver_lookup_symbol]
+    shl rax, 1
+    jc .lsv_done
+    add rax, [ver_versym_off]
+    jc .lsv_done
+    call read_version_at
+    test eax, eax
+    jz .lsv_done
+    movzx eax, word [ver_versym_entry]
+    test eax, 0x8000
+    jz .lsv_visible
+    mov byte [ver_lookup_hidden], 1
+.lsv_visible:
+    and eax, 0x7fff
+    cmp eax, 2
+    jb .lsv_done
+    mov [ver_lookup_index], eax
+    lea rdx, [rel ver_map_kind]
+    movzx ecx, byte [rdx + rax]
+    test ecx, ecx
+    jz .lsv_done
+    mov [ver_lookup_kind], cl
+    mov edx, [ver_lookup_index]
+    shl rdx, 2
+    lea rdi, [rel ver_map_name]
+    mov eax, [rdi + rdx]
+    mov [ver_lookup_name_off], eax
+    lea rdi, [rel ver_map_library]
+    mov eax, [rdi + rdx]
+    mov [ver_lookup_library_off], eax
+.lsv_done:
+    ret
+
+print_symbol_version_suffix:
+    call lookup_symbol_version
+    cmp byte [ver_lookup_kind], 0
+    je .psvs_done
+    cmp byte [ver_lookup_kind], 2
+    jne .psvs_single
+    cmp byte [ver_lookup_hidden], 0
+    jne .psvs_single
+    PRINT sym_version_atat
+    jmp .psvs_name
+.psvs_single:
+    PRINT sym_version_at
+.psvs_name:
+    lea rsi, [ver_strings]
+    mov eax, [ver_lookup_name_off]
+    add rsi, rax
+    call print_cstr
+.psvs_done:
+    ret
+
+emit_symbol_json_version:
+    PRINT jk_version
+    cmp dword [sym_table_type], 11 ; only SHT_DYNSYM has Versym entries
+    jne .esjv_none
+    mov rdi, [sym_table_index]
+    mov rsi, [sym_entry_index]
+    call lookup_symbol_version
+    cmp byte [ver_lookup_kind], 0
+    jne .esjv_object
+.esjv_none:
+    PRINT j_null
+    ret
+.esjv_object:
+    PRINT j_lbrace
+    PRINT jk_index
+    mov eax, [ver_lookup_index]
+    call print_dec
+    PRINT j_comma
+    PRINT jk_name
+    lea rsi, [ver_strings]
+    mov eax, [ver_lookup_name_off]
+    add rsi, rax
+    call jstr
+    PRINT j_comma
+    PRINT jk_kind
+    cmp byte [ver_lookup_kind], 1
+    jne .esjv_defined
+    lea rsi, [sym_version_required]
+    jmp .esjv_kind
+.esjv_defined:
+    lea rsi, [sym_version_defined]
+.esjv_kind:
+    call jname
+    PRINT j_comma
+    PRINT jk_library
+    cmp byte [ver_lookup_kind], 1
+    jne .esjv_no_library
+    lea rsi, [ver_strings]
+    mov eax, [ver_lookup_library_off]
+    add rsi, rax
+    call jstr
+    jmp .esjv_hidden
+.esjv_no_library:
+    PRINT j_null
+.esjv_hidden:
+    PRINT j_comma
+    PRINT jk_hidden
+    cmp byte [ver_lookup_hidden], 0
+    je .esjv_visible
+    PRINT j_true
+    jmp .esjv_end
+.esjv_visible:
+    PRINT j_false
+.esjv_end:
+    PRINT j_rbrace
+    ret
+
 ; Symbol tables. These are opt-in in the text report because they can be large;
 ; JSON remains complete and always includes them.
 ; ---------------------------------------------------------------------------
@@ -2719,6 +3353,12 @@ emit_symbol_text:
     mov eax, dword [syment]
     call dynstr_name_ptr
     call print_cstr
+    cmp dword [sym_table_type], 11
+    jne .est_no_version
+    mov rdi, [sym_table_index]
+    mov rsi, [sym_entry_index]
+    call print_symbol_version_suffix
+.est_no_version:
     PRINT nl
     ret
 
@@ -2769,6 +3409,8 @@ emit_symbol_json:
     PRINT j_comma
     PRINT jk_section_kind
     call emit_symbol_json_section_kind
+    PRINT j_comma
+    call emit_symbol_json_version
     PRINT j_rbrace
     ret
 
@@ -3756,6 +4398,9 @@ print_imports:
     PRINT dyn_indent
     pop rsi
     call print_cstr
+    mov rdi, [dsym_index]
+    mov rsi, r13
+    call print_symbol_version_suffix
     PRINT nl
     inc rbx
 .pi_next:
@@ -3803,6 +4448,7 @@ analyze_dynamic:
     call find_section
     cmp rax, -1
     je .ad_ret
+    mov [dsym_index], eax
     mov rax, [shdr + SH_OFFSET]
     mov [dsym_off], rax
     mov rax, [shdr + SH_SIZE]
@@ -3811,6 +4457,9 @@ analyze_dynamic:
     mov [dsym_ent], rax
     mov eax, dword [shdr + SH_LINK]
     mov [dsym_link], eax
+    mov eax, dword [dsym_link]
+    call load_dynstr
+    call prepare_symbol_versions
     mov eax, dword [dsym_link]
     call load_dynstr
     call print_imports
