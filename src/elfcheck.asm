@@ -4831,7 +4831,7 @@ jname:                     ; in: rsi = cstr
     ret
 
 ; ---------------------------------------------------------------------------
-; jstr - print rsi as a JSON string, escaping \" \\ and control bytes
+; jstr - print rsi as JSON, escaping quotes, controls and non-ASCII bytes
 ; ---------------------------------------------------------------------------
 jstr:                      ; in: rsi = cstr
     push rsi
@@ -4853,7 +4853,7 @@ jhex:                      ; in: rax = value
     ret
 
 ; ---------------------------------------------------------------------------
-; json_escape - print NUL-terminated string (rsi), escaping JSON specials.
+; json_escape - escape JSON specials and non-ASCII bytes from file strings.
 ; ---------------------------------------------------------------------------
 json_escape:               ; in: rsi = cstr
     push rbx
@@ -4868,7 +4868,9 @@ json_escape:               ; in: rsi = cstr
     je .je_bslash
     cmp al, 0x20               ; control char
     jb .je_ctrl
-    mov [jbuf], al             ; ordinary byte
+    cmp al, 0x7f               ; escape non-ASCII bytes as \u00XX
+    ja .je_ctrl
+    mov [jbuf], al             ; ordinary ASCII byte
     lea rsi, [jbuf]
     mov rdx, 1
     call print_str

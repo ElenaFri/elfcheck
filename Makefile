@@ -6,6 +6,7 @@
 #   make            build the elfcheck binary
 #   make run ARGS=f run against a file
 #   make test       build and run the test suite
+#   make fuzz-smoke run a bounded deterministic mutation smoke test
 #   make coverage   run tests under kcov and generate a source coverage report
 #   make clean      remove build and coverage artifacts
 
@@ -26,7 +27,7 @@ OBJS := $(patsubst $(SRC_DIR)/%.asm,$(BUILD_DIR)/%.o,$(SRCS))
 NASMFLAGS ?= -f elf64 -g -F dwarf -Wall -w-reloc-rel-dword -w-reloc-abs-qword
 LDFLAGS   ?= -nostdlib -no-pie
 
-.PHONY: all run test coverage clean
+.PHONY: all run test fuzz-smoke coverage clean
 
 all: $(TARGET)
 
@@ -44,6 +45,9 @@ run: $(TARGET)
 
 test: $(TARGET)
 	./tests/run_tests.sh
+
+fuzz-smoke: $(TARGET)
+	python3 ./tests/fuzz_smoke.py ./$(TARGET)
 
 coverage:
 	@command -v $(KCOV) >/dev/null 2>&1 || { \
