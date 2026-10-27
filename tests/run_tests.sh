@@ -528,6 +528,14 @@ elfcheck_vex_fixture:
     vaddpd ymm3, ymm4, ymm5
     vandps ymm8, ymm9, ymm10
     vaddps ymm8, ymm9, ymm10
+    vmovups xmm0, xmm1
+    vmovupd xmm8, xmm9
+    vmovaps ymm0, ymm1
+    vmovapd ymm8, ymm9
+    vmovups xmm2, [r8 + r9*4 + 16]
+    vmovupd [r10 + r11*2 + 32], xmm12
+    vmovaps ymm3, [r8 + r9*4 + 64]
+    vmovapd [r10 + r11*2 + 128], ymm13
     vzeroupper
     ret
 .end:
@@ -551,6 +559,12 @@ elfcheck_vex_scalar_l_unsupported:
     ret
 .end:
 
+global elfcheck_vex_move_vvvv_unsupported:function (elfcheck_vex_move_vvvv_unsupported.end - elfcheck_vex_move_vvvv_unsupported)
+elfcheck_vex_move_vvvv_unsupported:
+    db 0xc5, 0xf0, 0x10, 0xc2
+    ret
+.end:
+
 global elfcheck_vex_truncated:function (elfcheck_vex_truncated.end - elfcheck_vex_truncated)
 elfcheck_vex_truncated:
     db 0xc5
@@ -559,14 +573,17 @@ EOF
     if nasm -f elf64 -o "$TMP/vex.o" "$TMP/vex.asm" 2>/dev/null; then
         out="$("$RUN_BIN" --function elfcheck_vex_fixture "$TMP/vex.o" 2>&1)"; code=$?
         check "VEX decodes packed and scalar 128-bit arithmetic" 0 "$code" "vaddss" "$out"
+        check "VEX decodes packed vector move forms" 0 "$code" "vmovups" "$out"
+        check "VEX decodes aligned vector move forms" 0 "$code" "vmovapd" "$out"
         check "VEX decodes the inverted vvvv register field" 0 "$code" "xmm0, xmm1, xmm2" "$out"
+        check "VEX store prints memory destination before register source" 0 "$code" "ymmword [r10+r11*2+0x80], ymm13" "$out"
         check "VEX C4 decodes extended XMM registers" 0 "$code" "xmm8, xmm9, xmm10" "$out"
         check "VEX.L=1 decodes 256-bit YMM registers" 0 "$code" "ymm0, ymm1, ymm2" "$out"
         check "VEX.L=1 decodes extended YMM registers" 0 "$code" "ymm8, ymm9, ymm10" "$out"
         check "VEX decodes vzeroupper" 0 "$code" "vzeroupper" "$out"
 
         printf '%s\n' "$out" > "$TMP/elfcheck-vex.out"
-        objdump -d -Mintel --disassemble=elfcheck_vex_fixture "$TMP/vex.o" > "$TMP/objdump-vex.out"
+        objdump -w -d -Mintel --disassemble=elfcheck_vex_fixture "$TMP/vex.o" > "$TMP/objdump-vex.out"
         diff_out="$(python3 - "$TMP/elfcheck-vex.out" "$TMP/objdump-vex.out" <<'PY'
 import re
 import sys
@@ -581,6 +598,7 @@ def parse(path):
             continue
         raw_bytes = " ".join(match.group(1).split()).lower()
         assembly = re.sub(r"\s*,\s*", ",", match.group(2).strip().lower())
+        assembly = re.sub(r"\bptr\s+", "", assembly)
         assembly = " ".join(assembly.split())
         result.append((raw_bytes, assembly))
     return result
@@ -604,6 +622,9 @@ PY
 
         out="$("$RUN_BIN" --function elfcheck_vex_scalar_l_unsupported "$TMP/vex.o" 2>&1)"; code=$?
         check "scalar VEX.L=1 remains on byte fallback" 0 "$code" ".byte 0xc5" "$out"
+
+        out="$("$RUN_BIN" --function elfcheck_vex_move_vvvv_unsupported "$TMP/vex.o" 2>&1)"; code=$?
+        check "VEX move with non-reserved vvvv falls back" 0 "$code" ".byte 0xc5" "$out"
 
         out="$("$RUN_BIN" --function elfcheck_vex_truncated "$TMP/vex.o" 2>&1)"; code=$?
         check "truncated VEX prefix safely falls back to one byte" 0 "$code" ".byte 0xc5" "$out"

@@ -2447,10 +2447,64 @@ decode_vex_payload:
 .done:
     ret
 
-; decode_vex - decode the supported 128-bit VEX/AVX instruction subset.
+; decode_vex - decode the supported 128/256-bit VEX/AVX instruction subset.
 decode_vex:
     cmp byte [d_vex_map], 1
     jne .unknown
+    cmp byte [d_op], 0x10
+    je .move_load
+    cmp byte [d_op], 0x11
+    je .move_store
+    cmp byte [d_op], 0x28
+    je .move_aligned_load
+    cmp byte [d_op], 0x29
+    je .move_aligned_store
+    jmp .not_move
+.move_load:
+    mov byte [d_style], ST_REG_RM
+    jmp .move
+.move_store:
+    mov byte [d_style], ST_RM_REG
+    jmp .move
+.move_aligned_load:
+    mov byte [d_style], ST_REG_RM
+    jmp .move
+.move_aligned_store:
+    mov byte [d_style], ST_RM_REG
+.move:
+    cmp byte [d_vex_pp], 1
+    ja .unknown
+    cmp byte [d_vvvv], 0        ; VEX.vvvv is reserved for these move forms
+    jne .unknown
+    cmp byte [d_op], 0x11
+    jbe .unaligned_move
+    cmp byte [d_vex_pp], 1
+    je .aligned_pd
+    lea rsi, [mn_vmovaps]
+    jmp .move_ready
+.aligned_pd:
+    lea rsi, [mn_vmovapd]
+    jmp .move_ready
+.unaligned_move:
+    cmp byte [d_vex_pp], 1
+    je .unaligned_pd
+    lea rsi, [mn_vmovups]
+    jmp .move_ready
+.unaligned_pd:
+    lea rsi, [mn_vmovupd]
+.move_ready:
+    mov [d_mnem], rsi
+    mov byte [d_vec], 1
+    mov byte [d_vec_size], 16
+    cmp byte [d_vex_l], 0
+    je .move_operands
+    mov byte [d_vec], 2
+    mov byte [d_vec_size], 32
+.move_operands:
+    call parse_modrm
+    call read_disp
+    ret
+.not_move:
     cmp byte [d_op], 0x77
     jne .packed
     cmp byte [d_vex_pp], 0

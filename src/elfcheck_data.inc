@@ -652,6 +652,10 @@ section .rodata
     mn_maxps: db "maxps",0
     mn_maxpd: db "maxpd",0
     mn_vzeroupper: db "vzeroupper",0
+    mn_vmovups: db "vmovups",0
+    mn_vmovupd: db "vmovupd",0
+    mn_vmovaps: db "vmovaps",0
+    mn_vmovapd: db "vmovapd",0
     mn_vandps: db "vandps",0
     mn_vandpd: db "vandpd",0
     mn_vandnps: db "vandnps",0
