@@ -25,7 +25,7 @@ A lightweight ELF64 inspector for Linux x86-64, written in NASM. It accepts ELF6
 - [x] Identify imported functions and dynamic dependencies
 - [x] Display static and dynamic symbol tables, including GNU symbol versions
 - [x] Display REL/RELA relocation entries and resolve symbol names
-- [x] Generate a security-oriented analysis report
+- [x] Report RELRO, NX, PIE and GNU x86 CET (IBT/SHSTK) hardening properties
 
 ## Requirements
 
@@ -132,9 +132,12 @@ and GNU hidden-version flag.
 
 Finally, a `Hardening:` section summarises the binary's exploit-mitigation
 posture, checksec-style: `RELRO` (none/partial/full), stack canary, `NX`
-(non-executable stack), `PIE`, `RPATH`/`RUNPATH`, and the number of fortified
-(`_chk`) functions. It is mirrored under `"hardening"` in `--json` output and,
-like `Security:`, is advisory and does not change the exit code.
+(non-executable stack), `PIE`, GNU x86 CET properties (`IBT`/`SHSTK`),
+`RPATH`/`RUNPATH`, and the number of fortified (`_chk`) functions. CET is
+reported as enabled/disabled from the ELF feature bits, or unknown when the
+GNU property is absent; this does not prove runtime CPU or loader enforcement.
+The report is mirrored under `"hardening"` in `--json` output and, like
+`Security:`, is advisory and does not change the exit code.
 
 Exit codes: `0` valid with no structural issues, `1` usage/read error or not an
 ELF file, `2` valid ELF header but structural inconsistencies were found.

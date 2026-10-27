@@ -746,11 +746,16 @@ check "hardening section present"          0 "$code" "$HARDENING_HEADING"   "$ou
 check "hardening reports RELRO"           0 "$code" "RELRO:"       "$out"
 check "hardening reports NX"              0 "$code" "NX:"          "$out"
 check "hardening reports PIE"             0 "$code" "PIE:"         "$out"
+check "hardening reports IBT"             0 "$code" "IBT:"         "$out"
+check "hardening reports SHSTK"           0 "$code" "SHSTK:"       "$out"
 
 out="$("$RUN_BIN" --json "$BIN" 2>&1)"; code=$?
 check "--json has hardening object"       0 "$code" '"hardening":{' "$out"
 check "--json has relro field"            0 "$code" '"relro":'      "$out"
 check "--json has fortify field"          0 "$code" '"fortify":'    "$out"
+check "--json has IBT field"              0 "$code" '"ibt":'         "$out"
+check "--json has SHSTK field"            0 "$code" '"shstk":'       "$out"
+check "JSON marks absent CET property unknown" 0 "$code" '"ibt":"unknown","shstk":"unknown"' "$out"
 
 # A typical dynamically-linked system ELF should be fully hardened.
 if [[ -r /bin/ls ]]; then
@@ -764,6 +769,19 @@ fi
 # RPATH / RUNPATH and no-PIE detection (needs gcc)
 if command -v gcc >/dev/null 2>&1; then
     printf 'int main(void){return 0;}\n' > "$TMP/h.c"
+    if gcc -fcf-protection=full -Wl,-z,ibt,-z,shstk -o "$TMP/cet-full.elf" "$TMP/h.c" 2>/dev/null; then
+        out="$("$RUN_BIN" --hardening "$TMP/cet-full.elf" 2>&1)"; code=$?
+        check "hardening detects CET IBT"   0 "$code" "IBT:           enabled" "$out"
+        check "hardening detects CET SHSTK" 0 "$code" "SHSTK:         enabled" "$out"
+        out="$("$RUN_BIN" --json "$TMP/cet-full.elf" 2>&1)"; code=$?
+        check "JSON reports enabled CET properties" 0 "$code" '"ibt":"enabled","shstk":"enabled"' "$out"
+    fi
+    if gcc -fcf-protection=branch -Wl,-z,ibt -o "$TMP/cet-ibt.elf" "$TMP/h.c" 2>/dev/null; then
+        out="$("$RUN_BIN" --hardening "$TMP/cet-ibt.elf" 2>&1)"; code=$?
+        check "hardening reports absent CET bit disabled" 0 "$code" "SHSTK:         disabled" "$out"
+        out="$("$RUN_BIN" --json "$TMP/cet-ibt.elf" 2>&1)"; code=$?
+        check "JSON distinguishes disabled CET bit" 0 "$code" '"ibt":"enabled","shstk":"disabled"' "$out"
+    fi
     if gcc -no-pie -o "$TMP/nopie.elf" "$TMP/h.c" 2>/dev/null; then
         out="$("$RUN_BIN" "$TMP/nopie.elf" 2>&1)"; code=$?
         check "hardening detects no-PIE"   0 "$code" "PIE:           disabled" "$out"
