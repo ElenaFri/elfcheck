@@ -725,11 +725,11 @@ disassemble:
 .find_done:
     cmp qword [sel_off], -1
     je .none
-    jmp .load_selected
+    jmp .range_selected
 .select_function:
     call select_function_range
     test eax, eax
-    jnz .load_selected
+    jnz .range_selected
     cmp byte [func_symbol_seen], 0
     jne .function_range_error
 .function_not_found:
@@ -747,6 +747,32 @@ disassemble:
     mov rsi, [function_name]
     call print_stderr_cstr
     lea rsi, [nl]
+    call print_stderr_cstr
+    mov byte [disasm_error], 1
+    ret
+.range_selected:
+    cmp byte [disasm_start_set], 0
+    je .load_selected
+    mov rax, [disasm_start_addr]
+    cmp rax, [sel_addr]
+    jb .start_address_error
+    mov rdx, [sel_size]
+    mov rcx, [sel_addr]
+    add rcx, rdx
+    jc .start_address_error
+    cmp rax, rcx
+    jae .start_address_error
+    mov rdx, rax
+    sub rdx, [sel_addr]
+    mov rcx, [sel_off]
+    add rcx, rdx
+    jc .start_address_error
+    mov [sel_off], rcx
+    mov [sel_addr], rax
+    sub [sel_size], rdx
+    jmp .load_selected
+.start_address_error:
+    lea rsi, [dis_start_err]
     call print_stderr_cstr
     mov byte [disasm_error], 1
     ret
@@ -801,16 +827,31 @@ disassemble:
     mov [d_cur], rax
     add rax, [text_len]
     mov [d_end], rax
+    cmp byte [disasm_count_set], 0
+    je .dloop
+    mov rax, [disasm_count]
+    mov [disasm_remaining], rax
 .dloop:
     mov rax, [d_cur]
     cmp rax, [d_end]
     jae .dend
+    cmp byte [disasm_count_set], 0
+    je .decode_next
+    cmp qword [disasm_remaining], 0
+    je .count_limit_reached
+.decode_next:
     lea rdx, [textbuf]                  ; vaddr of this instruction
     sub rax, rdx
     add rax, [text_vaddr]
     mov [d_vaddr], rax
     call decode_one
+    cmp byte [disasm_count_set], 0
+    je .dloop
+    dec qword [disasm_remaining]
     jmp .dloop
+.count_limit_reached:
+    PRINT dis_count_note
+    jmp .ret
 .dend:
     cmp qword [text_trunc], 0
     je .ret

@@ -11,6 +11,10 @@ _start:
     mov byte [help_mode], 0
     mov byte [disasm_error], 0
     mov qword [function_name], 0
+    mov byte [disasm_start_set], 0
+    mov byte [disasm_count_set], 0
+    mov qword [disasm_start_addr], 0
+    mov qword [disasm_count], 0
     mov dword [filter_mask], 0
     mov rcx, 1               ; i = 1 (skip argv[0])
 .arg_loop:
@@ -38,6 +42,60 @@ _start:
     mov byte [disasm_mode], 1
     jmp .arg_next
 .not_function_arg:
+    mov rsi, [r9 + rcx*8]
+    lea rdi, [opt_start_address]
+    call streq
+    test al, al
+    jz .not_start_address
+    cmp byte [disasm_start_set], 0
+    jne .usage
+    inc rcx
+    cmp rcx, r8
+    jae .usage
+    mov rdi, [r9 + rcx*8]
+    test rdi, rdi
+    jz .usage
+    cmp byte [rdi], '0'
+    jne .parse_start_address
+    mov al, [rdi + 1]
+    cmp al, 'x'
+    je .strip_address_prefix
+    cmp al, 'X'
+    jne .parse_start_address
+.strip_address_prefix:
+    add rdi, 2
+.parse_start_address:
+    mov esi, 16
+    call parse_unsigned
+    jc .usage
+    mov [disasm_start_addr], rax
+    mov byte [disasm_start_set], 1
+    mov byte [disasm_mode], 1
+    jmp .arg_next
+.not_start_address:
+    mov rsi, [r9 + rcx*8]
+    lea rdi, [opt_count]
+    call streq
+    test al, al
+    jz .not_count
+    cmp byte [disasm_count_set], 0
+    jne .usage
+    inc rcx
+    cmp rcx, r8
+    jae .usage
+    mov rdi, [r9 + rcx*8]
+    test rdi, rdi
+    jz .usage
+    mov esi, 10
+    call parse_unsigned
+    jc .usage
+    test rax, rax
+    jz .usage
+    mov [disasm_count], rax
+    mov byte [disasm_count_set], 1
+    mov byte [disasm_mode], 1
+    jmp .arg_next
+.not_count:
     FILTARG opt_header,    FILT_HEADER
     FILTARG opt_segments,  FILT_SEGMENTS
     FILTARG opt_sections,  FILT_SECTIONS

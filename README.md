@@ -96,9 +96,14 @@ show their symbol and type.
 ```bash
 ./elfcheck --disasm <file>   # or: ./elfcheck -d <file>
 ./elfcheck --function main <file>  # only a sized function from .symtab/.dynsym
+./elfcheck --start-address 0x401000 --count 40 <file>
 ```
 
-The disassembly can be long; pipe it through a pager or the usual filters:
+`--start-address` accepts a hexadecimal address within the selected executable
+section; it also works without a function symbol. `--count` is a positive decimal
+instruction limit. Both options imply disassembly, and can be combined with
+`--function` when the address lies inside that function. The disassembly can also
+be piped through a pager or the usual filters:
 
 ```bash
 ./elfcheck -d <file> | less

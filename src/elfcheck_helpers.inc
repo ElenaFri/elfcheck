@@ -53,6 +53,74 @@ streq:
     pop rsi
     ret
 
+; parse_unsigned - parse a base-10 or base-16 NUL-terminated integer.
+;   in: rdi = string, esi = base (10 or 16)
+;   out: rax = value, CF=1 for empty, invalid or overflowing input.
+; Preserves the argument-loop registers used by _start.
+parse_unsigned:
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push r8
+    push r9
+    mov rbx, rdi
+    mov r8d, esi
+    xor eax, eax
+    xor r9d, r9d
+.loop:
+    movzx edx, byte [rbx]
+    test dl, dl
+    jz .end
+    cmp dl, '0'
+    jb .bad
+    cmp dl, '9'
+    jbe .decimal
+    cmp r8d, 16
+    jne .bad
+    cmp dl, 'a'
+    jb .upper
+    cmp dl, 'f'
+    jbe .lower
+.upper:
+    cmp dl, 'A'
+    jb .bad
+    cmp dl, 'F'
+    ja .bad
+    sub dl, 'A' - 10
+    jmp .digit
+.lower:
+    sub dl, 'a' - 10
+    jmp .digit
+.decimal:
+    sub dl, '0'
+.digit:
+    movzx esi, dl
+    mul r8
+    test rdx, rdx
+    jnz .bad
+    movzx rdx, si
+    add rax, rdx
+    jc .bad
+    inc r9
+    inc rbx
+    jmp .loop
+.end:
+    test r9, r9
+    jz .bad
+    clc
+    jmp .return
+.bad:
+    stc
+.return:
+    pop r9
+    pop r8
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    ret
+
 ; ---------------------------------------------------------------------------
 ; vprint / vdec / vhex - like print_cstr/print_dec/print_hex, but no-ops when
 ; [silent] is set.  Lets validate_structure double as a silent issue counter.

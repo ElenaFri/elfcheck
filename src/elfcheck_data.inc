@@ -3,6 +3,7 @@ section .rodata
 
     usage_msg:      db "Usage: elfcheck [options] <file>", 10
                     db "  Output modes:   --json   --disasm | -d   --function <name>", 10
+                    db "  Disasm range:   --start-address <hex> --count <n>", 10
                     db "  Section filters: --header --segments --sections --validate", 10
                     db "                   --security --dynamic --hardening --symbols", 10
                     db "                   --relocs (default report; tables are opt-in)", 10
@@ -431,7 +432,9 @@ section .rodata
     dis_nosect_len: equ $ - dis_nosect
     func_err_not_found: db "elfcheck: function not found: ", 0
     func_err_no_range: db "elfcheck: function has no usable executable range: ", 0
+    dis_start_err:  db "elfcheck: error: start address is outside selected executable section", 10, 0
     dis_trunc_note: db "  ... (section larger than buffer; output truncated)", 10, 0
+    dis_count_note: db "  ... (instruction limit reached)", 10, 0
     dis_colon:      db ":", 0
     dis_space:      db " ", 0
     dis_comma:      db ", ", 0
@@ -775,6 +778,8 @@ section .rodata
     opt_disasm:     db "--disasm", 0
     opt_disasm_s:   db "-d", 0
     opt_function:   db "--function", 0
+    opt_start_address: db "--start-address", 0
+    opt_count:      db "--count", 0
 
 section .bss
     ehdr:           resb EHDR_SIZE     ; full ELF header
@@ -844,6 +849,11 @@ section .bss
     help_mode:      resb 1             ; 1 = --help/-h given
     disasm_error:   resb 1             ; 1 = targeted disassembly failed
     function_name:  resq 1             ; requested function name, or 0
+    disasm_start_set: resb 1           ; 1 = --start-address supplied
+    disasm_count_set: resb 1           ; 1 = --count supplied
+    disasm_start_addr: resq 1          ; requested executable-section address
+    disasm_count:   resq 1             ; maximum decoded instructions
+    disasm_remaining: resq 1           ; instructions remaining in bounded report
     filter_mask:    resd 1             ; selected section bits (0 = use default sections)
     eff_mask:       resd 1             ; effective mask used while printing
     silent:         resb 1             ; 1 = validate_structure suppresses output

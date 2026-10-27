@@ -654,10 +654,58 @@ PY
 
         out="$("$RUN_BIN" --function elfcheck_vex_truncated "$TMP/vex.o" 2>&1)"; code=$?
         check "truncated VEX prefix safely falls back to one byte" 0 "$code" ".byte 0xc5" "$out"
+
+        out="$("$RUN_BIN" "$TMP/vex.o" --start-address 0x4 --count 2 2>&1)"; code=$?
+        check "start address works without a function symbol request" 0 "$code" "0x4:" "$out"
+        check "range begins at the selected address" 0 "$code" "vandpd" "$out"
+        check "instruction count includes the requested second instruction" 0 "$code" "vandnps" "$out"
+        check_absent "range omits bytes before the requested address" 0 "$code" "vandps" "$out"
+        check_absent "instruction limit omits following instructions" 0 "$code" "vorps" "$out"
+        check "instruction limit is reported" 0 "$code" "instruction limit reached" "$out"
+
+        out="$("$RUN_BIN" --count 1 "$TMP/vex.o" 2>&1)"; code=$?
+        check "count alone limits disassembly from section start" 0 "$code" "vandps" "$out"
+        check_absent "count alone stops after one instruction" 0 "$code" "vandpd" "$out"
+
+        out="$("$RUN_BIN" --function elfcheck_vex_fixture --start-address 0x4 --count 1 "$TMP/vex.o" 2>&1)"; code=$?
+        check "start address can narrow a named function" 0 "$code" "Disassembly of function elfcheck_vex_fixture" "$out"
+        check "function range starts at requested address" 0 "$code" "vandpd" "$out"
+        check_absent "function range omits earlier instructions" 0 "$code" "vandps" "$out"
+
+        out="$("$RUN_BIN" --start-address 0x100000 "$TMP/vex.o" 2>&1)"; code=$?
+        check "out-of-range start address reports an error" 1 "$code" "outside selected executable section" "$out"
+
+        out="$("$RUN_BIN" "$TMP/vex.o" --start-address 0X4 --count 1 2>&1)"; code=$?
+        check "uppercase 0X prefix is accepted" 0 "$code" "0x4:" "$out"
+        check "uppercase 0X prefix selects the same address" 0 "$code" "vandpd" "$out"
     else
         check "NASM assembles VEX test fixture" 0 1 "unavailable" ""
     fi
 fi
+
+# Range options reject missing, zero, malformed and overflowing arguments.
+out="$("$RUN_BIN" --start-address 2>&1)"; code=$?
+check "--start-address requires an address and file" 1 "$code" "$USAGE_HEADING" "$out"
+out="$("$RUN_BIN" --start-address 0x "$BIN" 2>&1)"; code=$?
+check "--start-address rejects an empty hexadecimal value" 1 "$code" "$USAGE_HEADING" "$out"
+out="$("$RUN_BIN" --start-address 0x10000000000000000 "$BIN" 2>&1)"; code=$?
+check "--start-address rejects overflow" 1 "$code" "$USAGE_HEADING" "$out"
+out="$("$RUN_BIN" --start-address 0xffffffffff "$BIN" 2>&1)"; code=$?
+check "--start-address parses lowercase hex digits" 1 "$code" "outside selected executable section" "$out"
+out="$("$RUN_BIN" --start-address 0XFFFFFFFFFF "$BIN" 2>&1)"; code=$?
+check "--start-address parses uppercase hex digits" 1 "$code" "outside selected executable section" "$out"
+out="$("$RUN_BIN" --start-address 0x1 "$BIN" 2>&1)"; code=$?
+check "--start-address below the section base reports an error" 1 "$code" "outside selected executable section" "$out"
+out="$("$RUN_BIN" --start-address 0x4 --start-address 0x8 "$BIN" 2>&1)"; code=$?
+check "--start-address rejects duplicate use" 1 "$code" "$USAGE_HEADING" "$out"
+out="$("$RUN_BIN" --count 2>&1)"; code=$?
+check "--count requires a value and file" 1 "$code" "$USAGE_HEADING" "$out"
+out="$("$RUN_BIN" --count 0 "$BIN" 2>&1)"; code=$?
+check "--count rejects zero" 1 "$code" "$USAGE_HEADING" "$out"
+out="$("$RUN_BIN" --count many "$BIN" 2>&1)"; code=$?
+check "--count rejects non-decimal input" 1 "$code" "$USAGE_HEADING" "$out"
+out="$("$RUN_BIN" --count 1 --count 2 "$BIN" 2>&1)"; code=$?
+check "--count rejects duplicate use" 1 "$code" "$USAGE_HEADING" "$out"
 
 # --function narrows disassembly to a bounded STT_FUNC symbol
 out="$("$RUN_BIN" --function 2>&1)"; code=$?
@@ -967,6 +1015,8 @@ check "--help prints usage, exit 0"       0 "$code" "$USAGE_HEADING" "$out"
 check "--help documents --symbols"       0 "$code" "--symbols" "$out"
 check "--help documents --relocs"        0 "$code" "--relocs" "$out"
 check "--help documents --function"      0 "$code" "--function <name>" "$out"
+check "--help documents --start-address" 0 "$code" "--start-address <hex>" "$out"
+check "--help documents --count"          0 "$code" "--count <n>" "$out"
 out="$("$RUN_BIN" -h 2>&1)"; code=$?
 check "-h alias prints usage, exit 0"     0 "$code" "$USAGE_HEADING" "$out"
 
