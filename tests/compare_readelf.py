@@ -117,10 +117,13 @@ def parse_section_headers(text):
             parsed = {
                 "index": int(index_match.group(1)),
                 "name": name,
+                "type": tokens[type_position],
                 "addr": int(numeric[0], 16),
                 "offset": int(numeric[1], 16),
                 "size": int(numeric[2], 16),
                 "flags": flag_tokens[0] if flag_tokens else "",
+                "link": int(trailing[-3], 10),
+                "info": int(trailing[-2], 10),
                 "align": int(trailing[-1], 10),
             }
             break
@@ -128,6 +131,260 @@ def parse_section_headers(text):
             raise ValueError(f"could not parse readelf section row: {line.strip()!r}")
         rows.append(parsed)
     return rows
+
+
+def normalize_symbol_name(name, symbol_type):
+    if name is None or symbol_type == "SECTION":
+        return ""
+    name = re.sub(r"\s+\(\d+\)$", "", name)
+    return re.sub(
+        r"@[A-Z][A-Z0-9_]*_(?:[0-9][A-Za-z0-9_.+-]*|PRIVATE)$", "", name
+    )
+
+
+def parse_symbol_section_index(value):
+    special = {
+        "UND": (0, "UND"),
+        "*UND*": (0, "UND"),
+        "ABS": (0xFFF1, "ABS"),
+        "*ABS*": (0xFFF1, "ABS"),
+        "COM": (0xFFF2, "COM"),
+        "*COM*": (0xFFF2, "COM"),
+    }
+    if value in special:
+        return special[value]
+    if value.isdecimal():
+        return int(value), None
+    raise ValueError(f"unsupported readelf symbol section index {value!r}")
+
+
+def parse_symbol_tables(text):
+    tables = []
+    current = None
+    row_pattern = re.compile(
+        r"^\s*(\d+):\s+([0-9a-f]+)\s+(\d+)\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)(?:\s+(.*))?$",
+        re.IGNORECASE,
+    )
+
+    def finish_table():
+        if current is None:
+            return
+        if len(current["symbols"]) != current["entry_count"]:
+            raise ValueError(
+                f"readelf symbol table {current['name']!r} reports "
+                f"{current['entry_count']} entries but parsed {len(current['symbols'])}"
+            )
+        tables.append(current)
+
+    for line in text.splitlines():
+        heading = re.match(
+            r"^Symbol table '([^']+)' contains (\d+) entries:", line
+        )
+        if heading is not None:
+            finish_table()
+            current = {
+                "name": heading.group(1),
+                "entry_count": int(heading.group(2)),
+                "symbols": [],
+            }
+            continue
+        if current is None:
+            continue
+        match = row_pattern.match(line)
+        if match is None:
+            continue
+        index, value, size, symbol_type, binding, visibility, section, name = match.groups()
+        section_index, section_kind = parse_symbol_section_index(section)
+        current["symbols"].append(
+            {
+                "index": int(index),
+                "value": int(value, 16),
+                "size": int(size),
+                "type": symbol_type,
+                "binding": binding,
+                "visibility": visibility,
+                "section_index": section_index,
+                "section_kind": section_kind,
+                "name": normalize_symbol_name(name or "", symbol_type),
+            }
+        )
+    finish_table()
+    return tables
+
+
+def parse_relocation_tables(text, section_types):
+    tables = []
+    current = None
+    for line in text.splitlines():
+        heading = re.match(
+            r"^Relocation section '([^']+)' at offset .* contains (\d+) entries?:",
+            line,
+        )
+        if heading is not None:
+            if current is not None:
+                finish_relocation_table(current)
+                tables.append(current)
+            name = heading.group(1)
+            if name not in section_types:
+                raise ValueError(f"readelf section type is missing for relocation table {name!r}")
+            current = {
+                "name": name,
+                "kind": section_types[name],
+                "entry_count": int(heading.group(2)),
+                "relocations": [],
+            }
+            continue
+        if current is None:
+            continue
+        fields = line.split()
+        if (
+            len(fields) < 3
+            or not HEX.fullmatch(fields[0])
+            or not HEX.fullmatch(fields[1])
+            or not fields[2].startswith("R_")
+        ):
+            continue
+        addend = None
+        if current["kind"] == "RELA":
+            if (
+                len(fields) >= 6
+                and fields[-2] in ("+", "-")
+                and HEX.fullmatch(fields[-1])
+            ):
+                magnitude = int(fields[-1], 16)
+                addend = magnitude if fields[-2] == "+" else -magnitude
+            elif (
+                len(fields) == 4
+                and int(fields[1], 16) >> 32 == 0
+                and HEX.fullmatch(fields[-1])
+            ):
+                addend = int(fields[-1], 16)
+        current["relocations"].append(
+            {
+                "offset": int(fields[0], 16),
+                "symbol_index": int(fields[1], 16) >> 32,
+                "type": fields[2],
+                "addend": addend,
+            }
+        )
+    if current is not None:
+        finish_relocation_table(current)
+        tables.append(current)
+    return tables
+
+
+def finish_relocation_table(table):
+    if len(table["relocations"]) != table["entry_count"]:
+        raise ValueError(
+            f"readelf relocation table {table['name']!r} reports "
+            f"{table['entry_count']} entries but parsed {len(table['relocations'])}"
+        )
+
+
+def compare_symbol_tables(path, report, expected_tables):
+    actual_tables = {table["name"]: table for table in report["symbol_tables"]}
+    expected_by_name = {table["name"]: table for table in expected_tables}
+    require_equal(path, "symbol-table count", len(actual_tables), len(expected_by_name))
+    for name, expected in expected_by_name.items():
+        actual = actual_tables.get(name)
+        if actual is None:
+            raise ValueError(f"{path}: elfcheck is missing symbol table {name!r}")
+        require_equal(path, f"symbol table {name} entry count", int(actual["entry_count"]), expected["entry_count"])
+        require_equal(path, f"symbol table {name} parsed count", len(actual["symbols"]), len(expected["symbols"]))
+        for index, (actual_symbol, expected_symbol) in enumerate(
+            zip(actual["symbols"], expected["symbols"])
+        ):
+            for key in ("type", "binding", "visibility", "name"):
+                require_equal(
+                    path,
+                    f"symbol table {name} entry {index} {key}",
+                    (
+                        normalize_symbol_name(actual_symbol[key], actual_symbol["type"])
+                        if key == "name"
+                        else actual_symbol[key]
+                    ),
+                    expected_symbol[key],
+                )
+            require_equal(
+                path,
+                f"symbol table {name} entry {index} value",
+                json_hex(actual_symbol["value"]),
+                expected_symbol["value"],
+            )
+            for key in ("size", "section_index", "section_kind"):
+                value = actual_symbol[key]
+                if key != "section_kind":
+                    value = int(value)
+                require_equal(
+                    path,
+                    f"symbol table {name} entry {index} {key}",
+                    value,
+                    expected_symbol[key],
+                )
+
+
+def compare_relocation_tables(
+    path, report, expected_tables, expected_sections, expected_symbol_tables
+):
+    actual_tables = {table["name"]: table for table in report["relocation_tables"]}
+    expected_by_name = {table["name"]: table for table in expected_tables}
+    require_equal(path, "relocation-table count", len(actual_tables), len(expected_by_name))
+    sections_by_index = {section["index"]: section for section in expected_sections}
+    symbol_tables_by_name = {
+        table["name"]: table for table in expected_symbol_tables
+    }
+    for name, expected in expected_by_name.items():
+        actual = actual_tables.get(name)
+        if actual is None:
+            raise ValueError(f"{path}: elfcheck is missing relocation table {name!r}")
+        section = sections_by_index.get(int(actual["index"]))
+        if section is None:
+            raise ValueError(f"{path}: readelf is missing section for relocation table {name!r}")
+        require_equal(path, f"relocation table {name} kind", actual["kind"], section["type"])
+        require_equal(path, f"relocation table {name} target index", int(actual["target_index"]), section["info"])
+        target = sections_by_index.get(section["info"])
+        if target is None:
+            raise ValueError(f"{path}: readelf is missing target section for {name!r}")
+        expected_target_name = None if section["info"] == 0 else target["name"]
+        require_equal(path, f"relocation table {name} target name", actual["target_name"], expected_target_name)
+        symbol_section = sections_by_index.get(section["link"])
+        if symbol_section is None:
+            raise ValueError(f"{path}: readelf is missing symbol table for relocation table {name!r}")
+        symbol_table = symbol_tables_by_name.get(symbol_section["name"])
+        if symbol_table is None:
+            raise ValueError(f"{path}: elfcheck is missing symbol table {symbol_section['name']!r}")
+        expected_symbols = symbol_table["symbols"]
+        require_equal(path, f"relocation table {name} entry count", int(actual["entry_count"]), expected["entry_count"])
+        require_equal(path, f"relocation table {name} parsed count", len(actual["relocations"]), len(expected["relocations"]))
+        for index, (actual_relocation, expected_relocation) in enumerate(
+            zip(actual["relocations"], expected["relocations"])
+        ):
+            for key in ("offset", "symbol_index", "type", "addend"):
+                value = actual_relocation[key]
+                if key == "offset":
+                    value = json_hex(value)
+                elif key in ("symbol_index",):
+                    value = int(value)
+                require_equal(
+                    path,
+                    f"relocation table {name} entry {index} {key}",
+                    value,
+                    expected_relocation[key],
+                )
+            symbol_index = expected_relocation["symbol_index"]
+            if symbol_index >= len(expected_symbols):
+                raise ValueError(
+                    f"{path}: relocation table {name} references missing symbol {symbol_index}"
+                )
+            require_equal(
+                path,
+                f"relocation table {name} entry {index} symbol name",
+                normalize_symbol_name(
+                    actual_relocation["symbol_name"],
+                    expected_symbols[symbol_index]["type"],
+                ),
+                expected_symbols[symbol_index]["name"],
+            )
 
 
 def compare_file(runner, readelf, path, env):
@@ -201,7 +458,31 @@ def compare_file(runner, readelf, path, env):
             "".join(sorted(expected["flags"])),
         )
 
-    return len(actual_program_headers), len(actual_sections)
+    symbol_output = run([readelf, "-sW", path], env)
+    expected_symbol_tables = parse_symbol_tables(symbol_output)
+    compare_symbol_tables(path, report, expected_symbol_tables)
+
+    relocation_output = run([readelf, "-rW", path], env)
+    section_types = {section["name"]: section["type"] for section in expected_sections}
+    expected_relocation_tables = parse_relocation_tables(
+        relocation_output, section_types
+    )
+    compare_relocation_tables(
+        path,
+        report,
+        expected_relocation_tables,
+        expected_sections,
+        expected_symbol_tables,
+    )
+
+    symbol_count = sum(table["entry_count"] for table in expected_symbol_tables)
+    relocation_count = sum(table["entry_count"] for table in expected_relocation_tables)
+    return (
+        len(actual_program_headers),
+        len(actual_sections),
+        symbol_count,
+        relocation_count,
+    )
 
 
 def main():
@@ -219,10 +500,13 @@ def main():
     failures = 0
     for path in paths:
         try:
-            program_count, section_count = compare_file(runner, readelf, path, env)
+            program_count, section_count, symbol_count, relocation_count = compare_file(
+                runner, readelf, path, env
+            )
             print(
                 f"readelf differential: matched {path} "
-                f"({program_count} program headers, {section_count} sections)"
+                f"({program_count} program headers, {section_count} sections, "
+                f"{symbol_count} symbols, {relocation_count} relocations)"
             )
         except (OSError, subprocess.TimeoutExpired, ValueError, KeyError) as error:
             print(f"readelf differential: mismatch: {error}", file=sys.stderr)

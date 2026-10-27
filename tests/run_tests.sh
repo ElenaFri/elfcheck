@@ -807,7 +807,7 @@ if command -v python3 >/dev/null 2>&1 && command -v readelf >/dev/null 2>&1; the
             fi
         fi
     fi
-    for candidate in /bin/sh /bin/ls "$TMP/symbols.elf" "$TMP/symbols.stripped.elf" "$TMP/functions.exec"; do
+    for candidate in /bin/sh /bin/ls "$TMP/symbols.elf" "$TMP/symbols.stripped.elf" "$TMP/functions.exec" "$TMP/relocs.o"; do
         [[ -r "$candidate" ]] && compare_files+=("$candidate")
     done
     out="$(python3 "$ROOT/tests/compare_readelf.py" "$RUN_BIN" "${compare_files[@]}" 2>&1)"; code=$?

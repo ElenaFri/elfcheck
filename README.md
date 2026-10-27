@@ -53,7 +53,7 @@ Run the test suite:
 make test
 ```
 
-The suite also compares ELF headers, segments and sections against GNU `readelf`.
+The suite also compares ELF headers, segments, sections, symbol tables and relocations against GNU `readelf`.
 Run the separate, bounded deterministic mutation smoke test with `make fuzz-smoke`.
 
 Measure NASM source-line coverage with `kcov` (the HTML report is written to
