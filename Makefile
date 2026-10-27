@@ -20,6 +20,7 @@ SRC_DIR   := src
 BUILD_DIR := build
 
 SRCS := $(wildcard $(SRC_DIR)/*.asm)
+INCS := $(wildcard $(SRC_DIR)/*.inc)
 OBJS := $(patsubst $(SRC_DIR)/%.asm,$(BUILD_DIR)/%.o,$(SRCS))
 
 # Keep -Wall; suppress only the expected cross-section relative dword references
@@ -34,8 +35,8 @@ all: $(TARGET)
 $(TARGET): $(OBJS) Makefile
 	$(LD) $(LDFLAGS) -o $@ $(OBJS)
 
-$(BUILD_DIR)/%.o: $(SRC_DIR)/%.asm Makefile | $(BUILD_DIR)
-	$(NASM) $(NASMFLAGS) -o "$@" "$(CURDIR)/$<"
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.asm $(INCS) Makefile | $(BUILD_DIR)
+	$(NASM) $(NASMFLAGS) -I "$(SRC_DIR)/" -o "$@" "$(CURDIR)/$<"
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)

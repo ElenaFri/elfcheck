@@ -39,7 +39,7 @@ jobs:
               root = ET.parse(report).getroot()
               for class_node in root.findall(".//class"):
                   filename = class_node.get("filename", "")
-                  if not filename.endswith(".asm"):
+                  if not filename.endswith((".asm", ".inc")):
                       continue
                   assembly_files.add(filename)
                   for line in class_node.findall("./lines/line"):
