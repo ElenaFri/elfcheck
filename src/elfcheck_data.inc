@@ -664,6 +664,18 @@ section .rodata
     mn_vorpd: db "vorpd",0
     mn_vxorps: db "vxorps",0
     mn_vxorpd: db "vxorpd",0
+    mn_vpand: db "vpand",0
+    mn_vpandn: db "vpandn",0
+    mn_vpor: db "vpor",0
+    mn_vpxor: db "vpxor",0
+    mn_vpaddb: db "vpaddb",0
+    mn_vpaddw: db "vpaddw",0
+    mn_vpaddd: db "vpaddd",0
+    mn_vpaddq: db "vpaddq",0
+    mn_vpsubb: db "vpsubb",0
+    mn_vpsubw: db "vpsubw",0
+    mn_vpsubd: db "vpsubd",0
+    mn_vpsubq: db "vpsubq",0
     mn_vaddps: db "vaddps",0
     mn_vaddpd: db "vaddpd",0
     mn_vmulps: db "vmulps",0

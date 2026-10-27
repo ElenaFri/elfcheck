@@ -2519,9 +2519,9 @@ decode_vex:
     ret
 .packed:
     cmp byte [d_op], 0x54
-    jb .unknown
+    jb .integer
     cmp byte [d_op], 0x5f
-    ja .unknown
+    ja .integer
     movzx ecx, byte [d_op]
     sub ecx, 0x54
     movzx eax, byte [d_vex_pp]
@@ -2567,6 +2567,82 @@ decode_vex:
     jne .decode_operands
     mov byte [d_vec_size], 8
 .decode_operands:
+    call parse_modrm
+    call read_disp
+    ret
+.integer:
+    cmp byte [d_vex_pp], 1
+    jne .unknown                 ; packed integer forms require the 66 prefix
+    cmp byte [d_op], 0xd4
+    je .vpaddq
+    cmp byte [d_op], 0xdb
+    je .vpand
+    cmp byte [d_op], 0xdf
+    je .vpandn
+    cmp byte [d_op], 0xeb
+    je .vpor
+    cmp byte [d_op], 0xef
+    je .vpxor
+    cmp byte [d_op], 0xf8
+    je .vpsubb
+    cmp byte [d_op], 0xf9
+    je .vpsubw
+    cmp byte [d_op], 0xfa
+    je .vpsubd
+    cmp byte [d_op], 0xfb
+    je .vpsubq
+    cmp byte [d_op], 0xfc
+    je .vpaddb
+    cmp byte [d_op], 0xfd
+    je .vpaddw
+    cmp byte [d_op], 0xfe
+    je .vpaddd
+    jmp .unknown
+.vpand:
+    lea rsi, [mn_vpand]
+    jmp .integer_ready
+.vpandn:
+    lea rsi, [mn_vpandn]
+    jmp .integer_ready
+.vpor:
+    lea rsi, [mn_vpor]
+    jmp .integer_ready
+.vpxor:
+    lea rsi, [mn_vpxor]
+    jmp .integer_ready
+.vpaddb:
+    lea rsi, [mn_vpaddb]
+    jmp .integer_ready
+.vpaddw:
+    lea rsi, [mn_vpaddw]
+    jmp .integer_ready
+.vpaddd:
+    lea rsi, [mn_vpaddd]
+    jmp .integer_ready
+.vpaddq:
+    lea rsi, [mn_vpaddq]
+    jmp .integer_ready
+.vpsubb:
+    lea rsi, [mn_vpsubb]
+    jmp .integer_ready
+.vpsubw:
+    lea rsi, [mn_vpsubw]
+    jmp .integer_ready
+.vpsubd:
+    lea rsi, [mn_vpsubd]
+    jmp .integer_ready
+.vpsubq:
+    lea rsi, [mn_vpsubq]
+.integer_ready:
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_VEC3
+    mov byte [d_vec], 1
+    mov byte [d_vec_size], 16
+    cmp byte [d_vex_l], 0
+    je .integer_operands
+    mov byte [d_vec], 2
+    mov byte [d_vec_size], 32
+.integer_operands:
     call parse_modrm
     call read_disp
     ret

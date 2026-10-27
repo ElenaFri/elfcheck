@@ -528,6 +528,19 @@ elfcheck_vex_fixture:
     vaddpd ymm3, ymm4, ymm5
     vandps ymm8, ymm9, ymm10
     vaddps ymm8, ymm9, ymm10
+    vpand xmm0, xmm1, xmm2
+    vpandn ymm3, ymm4, ymm5
+    vpor xmm8, xmm9, xmm10
+    vpxor ymm8, ymm9, ymm10
+    vpaddb xmm0, xmm1, xmm2
+    vpaddw ymm3, ymm4, ymm5
+    vpaddd xmm8, xmm9, xmm10
+    vpaddq ymm8, ymm9, ymm10
+    vpsubb xmm0, xmm1, xmm2
+    vpsubw ymm3, ymm4, ymm5
+    vpsubd xmm8, xmm9, xmm10
+    vpsubq ymm8, ymm9, ymm10
+    vpaddd ymm2, ymm3, [r8 + r9*4 + 16]
     vmovups xmm0, xmm1
     vmovupd xmm8, xmm9
     vmovaps ymm0, ymm1
@@ -565,6 +578,12 @@ elfcheck_vex_move_vvvv_unsupported:
     ret
 .end:
 
+global elfcheck_vex_integer_prefix_unsupported:function (elfcheck_vex_integer_prefix_unsupported.end - elfcheck_vex_integer_prefix_unsupported)
+elfcheck_vex_integer_prefix_unsupported:
+    db 0xc5, 0xf0, 0xdb, 0xc2
+    ret
+.end:
+
 global elfcheck_vex_truncated:function (elfcheck_vex_truncated.end - elfcheck_vex_truncated)
 elfcheck_vex_truncated:
     db 0xc5
@@ -575,6 +594,10 @@ EOF
         check "VEX decodes packed and scalar 128-bit arithmetic" 0 "$code" "vaddss" "$out"
         check "VEX decodes packed vector move forms" 0 "$code" "vmovups" "$out"
         check "VEX decodes aligned vector move forms" 0 "$code" "vmovapd" "$out"
+        check "AVX2 decodes packed logical operations" 0 "$code" "vpandn" "$out"
+        check "AVX2 decodes packed byte addition" 0 "$code" "vpaddb" "$out"
+        check "AVX2 decodes packed quadword subtraction" 0 "$code" "vpsubq" "$out"
+        check "AVX2 handles 256-bit memory sources" 0 "$code" "ymmword [r8+r9*4+0x10]" "$out"
         check "VEX decodes the inverted vvvv register field" 0 "$code" "xmm0, xmm1, xmm2" "$out"
         check "VEX store prints memory destination before register source" 0 "$code" "ymmword [r10+r11*2+0x80], ymm13" "$out"
         check "VEX C4 decodes extended XMM registers" 0 "$code" "xmm8, xmm9, xmm10" "$out"
@@ -625,6 +648,9 @@ PY
 
         out="$("$RUN_BIN" --function elfcheck_vex_move_vvvv_unsupported "$TMP/vex.o" 2>&1)"; code=$?
         check "VEX move with non-reserved vvvv falls back" 0 "$code" ".byte 0xc5" "$out"
+
+        out="$("$RUN_BIN" --function elfcheck_vex_integer_prefix_unsupported "$TMP/vex.o" 2>&1)"; code=$?
+        check "AVX2 integer opcode without mandatory 66 prefix falls back" 0 "$code" ".byte 0xc5" "$out"
 
         out="$("$RUN_BIN" --function elfcheck_vex_truncated "$TMP/vex.o" 2>&1)"; code=$?
         check "truncated VEX prefix safely falls back to one byte" 0 "$code" ".byte 0xc5" "$out"

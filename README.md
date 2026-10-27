@@ -20,7 +20,7 @@ A lightweight ELF64 inspector for Linux x86-64, written in NASM. It accepts ELF6
 - [x] Add automated tests with valid and malformed ELF files
 - [x] Disassemble machine code sections or selected functions
 - [x] Display assembly instructions with addresses and opcodes
-- [x] Decode selected 128- and 256-bit AVX/VEX arithmetic and packed moves
+- [x] Decode selected 128- and 256-bit AVX/VEX arithmetic, packed integer operations and moves
 - [x] Detect potentially suspicious ELF properties
 - [x] Check segment permissions and executable stack settings
 - [x] Identify imported functions and dynamic dependencies
@@ -83,10 +83,12 @@ report (pipe through `jq` to pretty-print):
 
 Disassemble the executable `.text` section (Intel syntax, with addresses and raw
 opcodes). The decoder covers common x86-64 integer instructions, selected SSE operations,
-and a subset of 128- and 256-bit AVX/VEX instructions: packed/scalar arithmetic,
-packed moves (`vmovups`, `vmovupd`, `vmovaps`, `vmovapd`), and `vzeroupper`. Scalar
-VEX moves, EVEX and unsupported instruction forms fall back to `.byte` one byte at
-a time, so instruction boundaries may be lost after an unsupported encoding. For linked executables,
+and a subset of 128- and 256-bit AVX/VEX instructions: packed/scalar floating-point
+arithmetic, selected packed integer operations (`vpand`, `vpor`, `vpxor`, `vpadd*`,
+`vpsub*`), packed moves (`vmovups`, `vmovupd`, `vmovaps`, `vmovapd`), and
+`vzeroupper`. Scalar VEX moves, EVEX and unsupported instruction forms fall back to
+`.byte` one byte at a time, so instruction boundaries may be lost after an
+unsupported encoding. For linked executables,
 direct branch targets are annotated when they exactly match a function symbol;
 for relocatable `.o` files, PC-relative branch and RIP-relative data relocations
 show their symbol and type.
