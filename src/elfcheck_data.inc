@@ -631,10 +631,51 @@ section .rodata
     mn_divpd: db "divpd",0
     mn_maxps: db "maxps",0
     mn_maxpd: db "maxpd",0
+    mn_vzeroupper: db "vzeroupper",0
+    mn_vandps: db "vandps",0
+    mn_vandpd: db "vandpd",0
+    mn_vandnps: db "vandnps",0
+    mn_vandnpd: db "vandnpd",0
+    mn_vorps: db "vorps",0
+    mn_vorpd: db "vorpd",0
+    mn_vxorps: db "vxorps",0
+    mn_vxorpd: db "vxorpd",0
+    mn_vaddps: db "vaddps",0
+    mn_vaddpd: db "vaddpd",0
+    mn_vmulps: db "vmulps",0
+    mn_vmulpd: db "vmulpd",0
+    mn_vsubps: db "vsubps",0
+    mn_vsubpd: db "vsubpd",0
+    mn_vminps: db "vminps",0
+    mn_vminpd: db "vminpd",0
+    mn_vdivps: db "vdivps",0
+    mn_vdivpd: db "vdivpd",0
+    mn_vmaxps: db "vmaxps",0
+    mn_vmaxpd: db "vmaxpd",0
+    mn_vaddss: db "vaddss",0
+    mn_vaddsd: db "vaddsd",0
+    mn_vmulss: db "vmulss",0
+    mn_vmulsd: db "vmulsd",0
+    mn_vsubss: db "vsubss",0
+    mn_vsubsd: db "vsubsd",0
+    mn_vminss: db "vminss",0
+    mn_vminsd: db "vminsd",0
+    mn_vdivss: db "vdivss",0
+    mn_vdivsd: db "vdivsd",0
+    mn_vmaxss: db "vmaxss",0
+    mn_vmaxsd: db "vmaxsd",0
     sse_ps_tbl: dq mn_andps,mn_andnps,mn_orps,mn_xorps,mn_addps,mn_mulps,0,0
                 dq mn_subps,mn_minps,mn_divps,mn_maxps
     sse_pd_tbl: dq mn_andpd,mn_andnpd,mn_orpd,mn_xorpd,mn_addpd,mn_mulpd,0,0
                 dq mn_subpd,mn_minpd,mn_divpd,mn_maxpd
+    vex_ps_tbl: dq mn_vandps,mn_vandnps,mn_vorps,mn_vxorps,mn_vaddps,mn_vmulps,0,0
+                dq mn_vsubps,mn_vminps,mn_vdivps,mn_vmaxps
+    vex_pd_tbl: dq mn_vandpd,mn_vandnpd,mn_vorpd,mn_vxorpd,mn_vaddpd,mn_vmulpd,0,0
+                dq mn_vsubpd,mn_vminpd,mn_vdivpd,mn_vmaxpd
+    vex_ss_tbl: dq 0,0,0,0,mn_vaddss,mn_vmulss,0,0
+                dq mn_vsubss,mn_vminss,mn_vdivss,mn_vmaxss
+    vex_sd_tbl: dq 0,0,0,0,mn_vaddsd,mn_vmulsd,0,0
+                dq mn_vsubsd,mn_vminsd,mn_vdivsd,mn_vmaxsd
     mn_hlt:  db "hlt",0
     ; string-operation base names (indexed 0-4), size suffix + rep prefix
     ; are appended at decode time into strmnem
@@ -908,6 +949,9 @@ section .bss
     d_defsize8:     resb 1             ; default operand size is 64-bit (push/pop)
     d_nosize:       resb 1             ; suppress memory size keyword (lea)
     d_op:           resb 1             ; primary opcode byte
+    d_vex_map:      resb 1             ; VEX opcode map
+    d_vex_pp:       resb 1             ; VEX mandatory-prefix selector
+    d_vvvv:         resb 1             ; decoded VEX.vvvv register index
     d_style:        resb 1             ; operand rendering style (0xff = unknown)
     d_srcsz:        resb 1             ; source size for movzx/movsx
     d_vec:          resb 1             ; 1 = XMM register operands

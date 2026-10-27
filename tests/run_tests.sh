@@ -494,6 +494,107 @@ check "-d alias works"                    0 "$code" "$TEXT_DISASSEMBLY_HEADING" 
 out="$("$RUN_BIN" "$BIN" -d 2>&1)"; code=$?
 check "-d accepted after path"            0 "$code" "$TEXT_DISASSEMBLY_HEADING" "$out"
 
+# VEX/AVX disassembly: compare supported instructions and bytes against objdump.
+if command -v nasm >/dev/null 2>&1 && command -v objdump >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+    cat > "$TMP/vex.asm" <<'EOF'
+BITS 64
+section .text
+
+global elfcheck_vex_fixture:function (elfcheck_vex_fixture.end - elfcheck_vex_fixture)
+elfcheck_vex_fixture:
+    vandps xmm0, xmm1, xmm2
+    vandpd xmm3, xmm4, xmm5
+    vandnps xmm5, xmm6, xmm7
+    vandnpd xmm8, xmm9, xmm10
+    vorps xmm0, xmm1, xmm2
+    vorpd xmm3, xmm4, xmm5
+    vxorps xmm5, xmm6, xmm7
+    vxorpd xmm8, xmm9, xmm10
+    vaddps xmm0, xmm1, xmm2
+    vaddpd xmm3, xmm4, xmm5
+    vaddss xmm5, xmm6, xmm7
+    vmulps xmm0, xmm1, xmm2
+    vmulsd xmm3, xmm4, xmm5
+    vsubps xmm5, xmm6, xmm7
+    vsubsd xmm8, xmm9, xmm10
+    vminss xmm0, xmm1, xmm2
+    vminpd xmm3, xmm4, xmm5
+    vdivss xmm5, xmm6, xmm7
+    vdivpd xmm8, xmm9, xmm10
+    vmaxps xmm0, xmm1, xmm2
+    vmaxsd xmm3, xmm4, xmm5
+    vaddps xmm8, xmm9, xmm10
+    vzeroupper
+    ret
+.end:
+
+global elfcheck_vex_memory:function (elfcheck_vex_memory.end - elfcheck_vex_memory)
+elfcheck_vex_memory:
+    vaddps xmm0, xmm1, [r8 + r9*4 + 16]
+    ret
+.end:
+
+global elfcheck_vex_unsupported:function (elfcheck_vex_unsupported.end - elfcheck_vex_unsupported)
+elfcheck_vex_unsupported:
+    db 0xc5, 0xfc, 0x58, 0xc2
+    ret
+.end:
+
+global elfcheck_vex_truncated:function (elfcheck_vex_truncated.end - elfcheck_vex_truncated)
+elfcheck_vex_truncated:
+    db 0xc5
+.end:
+EOF
+    if nasm -f elf64 -o "$TMP/vex.o" "$TMP/vex.asm" 2>/dev/null; then
+        out="$("$RUN_BIN" --function elfcheck_vex_fixture "$TMP/vex.o" 2>&1)"; code=$?
+        check "VEX decodes packed and scalar 128-bit arithmetic" 0 "$code" "vaddss" "$out"
+        check "VEX decodes the inverted vvvv register field" 0 "$code" "xmm0, xmm1, xmm2" "$out"
+        check "VEX C4 decodes extended XMM registers" 0 "$code" "xmm8, xmm9, xmm10" "$out"
+        check "VEX decodes vzeroupper" 0 "$code" "vzeroupper" "$out"
+
+        printf '%s\n' "$out" > "$TMP/elfcheck-vex.out"
+        objdump -d -Mintel --disassemble=elfcheck_vex_fixture "$TMP/vex.o" > "$TMP/objdump-vex.out"
+        diff_out="$(python3 - "$TMP/elfcheck-vex.out" "$TMP/objdump-vex.out" <<'PY'
+import re
+import sys
+
+instruction = re.compile(r"^\s*(?:0x)?[0-9a-f]+:\s*((?:[0-9a-f]{2}\s+)+)\s*(.*?)\s*$", re.I)
+
+def parse(path):
+    result = []
+    for line in open(path, encoding="utf-8"):
+        match = instruction.match(line)
+        if not match:
+            continue
+        raw_bytes = " ".join(match.group(1).split()).lower()
+        assembly = re.sub(r"\s*,\s*", ",", match.group(2).strip().lower())
+        assembly = " ".join(assembly.split())
+        result.append((raw_bytes, assembly))
+    return result
+
+elfcheck, objdump = map(parse, sys.argv[1:])
+if not elfcheck or elfcheck != objdump:
+    print(f"elfcheck: {elfcheck}")
+    print(f"objdump:  {objdump}")
+    raise SystemExit(1)
+print("instruction sequences match")
+PY
+)"; diff_code=$?
+        check "VEX instruction bytes and operands match objdump" 0 "$diff_code" "instruction sequences match" "$diff_out"
+
+        out="$("$RUN_BIN" --function elfcheck_vex_memory "$TMP/vex.o" 2>&1)"; code=$?
+        check "VEX C4 decodes extended memory base and index" 0 "$code" "[r8+r9*4+0x10]" "$out"
+
+        out="$("$RUN_BIN" --function elfcheck_vex_unsupported "$TMP/vex.o" 2>&1)"; code=$?
+        check "unsupported 256-bit VEX keeps byte fallback" 0 "$code" ".byte 0xc5" "$out"
+
+        out="$("$RUN_BIN" --function elfcheck_vex_truncated "$TMP/vex.o" 2>&1)"; code=$?
+        check "truncated VEX prefix safely falls back to one byte" 0 "$code" ".byte 0xc5" "$out"
+    else
+        check "NASM assembles VEX test fixture" 0 1 "unavailable" ""
+    fi
+fi
+
 # --function narrows disassembly to a bounded STT_FUNC symbol
 out="$("$RUN_BIN" --function 2>&1)"; code=$?
 check "--function requires a name and file" 1 "$code" "$USAGE_HEADING" "$out"

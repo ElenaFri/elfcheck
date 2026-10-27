@@ -149,6 +149,7 @@
 %define ST_RM_CL    11         ; r/m, cl         (shift by cl)
 %define ST_REG_RM_B 12         ; reg, r/m (movzx/movsx: dest wide, src byte/word)
 %define ST_REG_RM_IMM 13       ; reg, r/m, imm (imul)
+%define ST_VEC3       14       ; VEX vector reg, vvvv reg, r/m
 
 default rel
 

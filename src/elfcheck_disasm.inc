@@ -1342,6 +1342,8 @@ render_operands:
     je .reg_rm_b
     cmp eax, ST_REG_RM_IMM
     je .reg_rm_imm
+    cmp eax, ST_VEC3
+    je .vec3
     ret
 .rm_reg:
     call cur_opnd_size
@@ -1468,6 +1470,19 @@ render_operands:
     pop rcx
     call emit_imm
     ret
+.vec3:
+    call cur_opnd_size
+    push rcx
+    mov al, [d_reg]
+    call emit_reg
+    PRINT dis_comma
+    mov rcx, [rsp]
+    mov al, [d_vvvv]
+    call emit_reg
+    PRINT dis_comma
+    pop rcx
+    call emit_rm
+    ret
 
 ; print_insn - render address, raw bytes and decoded instruction
 print_insn:
@@ -1502,6 +1517,7 @@ print_insn:
     jz .done
     mov ecx, 7
     call print_cstr_pad
+    PRINT dis_space
     call render_operands
 .done:
     PRINT nl
@@ -1534,6 +1550,11 @@ decode_one:
     call reset_decode_state
     mov rax, [d_cur]
     mov [d_start], rax
+    call peek8
+    cmp al, 0xc4
+    je .vex
+    cmp al, 0xc5
+    je .vex
 .pfx:
     call peek8
     cmp al, 0x66
@@ -1603,6 +1624,59 @@ decode_one:
     call fetch8
     mov [d_op], al
     call decode_two_byte
+    jmp .finish
+.vex:
+    call fetch8                 ; C4 or C5
+    cmp al, 0xc5
+    je .vex2
+    call fetch8                 ; VEX3: R/X/B and opcode map
+    mov dl, al
+    and al, 0x1f
+    mov [d_vex_map], al
+    cmp al, 1                    ; only the 0F opcode map is implemented
+    jne .vex_unknown
+    test dl, 0x80
+    jnz .vex3_no_r
+    or byte [d_rex], 4
+.vex3_no_r:
+    test dl, 0x40
+    jnz .vex3_no_x
+    or byte [d_rex], 2
+.vex3_no_x:
+    test dl, 0x20
+    jnz .vex3_no_b
+    or byte [d_rex], 1
+.vex3_no_b:
+    call fetch8                 ; VEX3: W/vvvv/L/pp
+    mov dl, al
+    test dl, 0x80               ; W=1 is outside the supported subset
+    jnz .vex_unknown
+    call decode_vex_payload
+    cmp byte [d_style], 0xff
+    je .finish
+    jmp .vex_opcode
+.vex2:
+    mov byte [d_vex_map], 1    ; C5 implies the 0F map
+    call fetch8                 ; VEX2: R/vvvv/L/pp
+    mov dl, al
+    test dl, 0x80
+    jnz .vex2_no_r
+    or byte [d_rex], 4
+.vex2_no_r:
+    call decode_vex_payload
+    cmp byte [d_style], 0xff
+    je .finish
+.vex_opcode:
+    cmp byte [d_trunc], 1
+    je .finish
+    call fetch8
+    mov [d_op], al
+    cmp byte [d_trunc], 1
+    je .finish
+    call decode_vex
+    jmp .finish
+.vex_unknown:
+    mov byte [d_style], 0xff
 .finish:
     cmp byte [d_trunc], 1
     je .as_byte
@@ -2333,6 +2407,85 @@ decode_one_byte:
     lea rsi, [strmnem]
     mov [d_mnem], rsi
     mov byte [d_style], ST_NONE
+    ret
+.unknown:
+    mov byte [d_style], 0xff
+    ret
+
+; decode_vex_payload - in dl = VEX byte containing vvvv/L/pp.
+; Converts the inverted register field and accepts only 128-bit encodings.
+decode_vex_payload:
+    mov byte [d_style], 0xff
+    cmp byte [d_trunc], 1
+    je .done
+    mov al, dl
+    shr al, 3
+    and al, 0x0f
+    xor al, 0x0f
+    mov [d_vvvv], al
+    test dl, 4
+    jnz .done                    ; 256-bit YMM is not yet supported
+    and dl, 3
+    mov [d_vex_pp], dl
+    mov byte [d_style], ST_NONE
+.done:
+    ret
+
+; decode_vex - decode the supported 128-bit VEX/AVX instruction subset.
+decode_vex:
+    cmp byte [d_vex_map], 1
+    jne .unknown
+    cmp byte [d_op], 0x77
+    jne .packed
+    cmp byte [d_vex_pp], 0
+    jne .unknown
+    cmp byte [d_vvvv], 0        ; reserved VEX.vvvv must be encoded as 1111
+    jne .unknown
+    lea rsi, [mn_vzeroupper]
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_NONE
+    ret
+.packed:
+    cmp byte [d_op], 0x54
+    jb .unknown
+    cmp byte [d_op], 0x5f
+    ja .unknown
+    movzx ecx, byte [d_op]
+    sub ecx, 0x54
+    movzx eax, byte [d_vex_pp]
+    cmp eax, 0
+    je .ps
+    cmp eax, 1
+    je .pd
+    cmp eax, 2
+    je .ss
+    lea rax, [vex_sd_tbl]
+    jmp .lookup
+.ps:
+    lea rax, [vex_ps_tbl]
+    jmp .lookup
+.pd:
+    lea rax, [vex_pd_tbl]
+    jmp .lookup
+.ss:
+    lea rax, [vex_ss_tbl]
+.lookup:
+    mov rsi, [rax + rcx*8]
+    test rsi, rsi
+    jz .unknown
+    mov [d_mnem], rsi
+    mov byte [d_style], ST_VEC3
+    mov byte [d_vec], 1
+    mov byte [d_vec_size], 16
+    cmp byte [d_vex_pp], 2
+    jb .decode_operands
+    mov byte [d_vec_size], 4
+    cmp byte [d_vex_pp], 3
+    jne .decode_operands
+    mov byte [d_vec_size], 8
+.decode_operands:
+    call parse_modrm
+    call read_disp
     ret
 .unknown:
     mov byte [d_style], 0xff
