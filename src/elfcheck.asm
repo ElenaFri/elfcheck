@@ -37,6 +37,7 @@
 %define EI_OSABI    7
 %define E_TYPE      16
 %define E_MACHINE   18
+%define E_VERSION   20
 %define E_ENTRY     24
 %define E_PHOFF     32
 %define E_SHOFF     40
@@ -47,6 +48,9 @@
 %define E_SHENTSIZE 58
 %define E_SHNUM     60
 %define E_SHSTRNDX  62
+%define ELFCLASS64  2
+%define ELFDATA2LSB 1
+%define EV_CURRENT  1
 
 ; ---- program header field offsets (Elf64_Phdr, 56 bytes) ----
 %define PHDR_SIZE   56
@@ -224,6 +228,9 @@ section .rodata
     trunc_msg:      db "elfcheck: error: truncated ELF header", 10
     trunc_len:      equ $ - trunc_msg
 
+    unsupported_msg: db "elfcheck: error: only ELF64 little-endian files are supported", 10
+    unsupported_len: equ $ - unsupported_msg
+
     ; ---- header labels (aligned, NUL-terminated, no newline) ----
     hdr_title:      db "ELF Header:", 10, 0
     nl:             db 10, 0
@@ -323,6 +330,9 @@ section .rodata
     m_phentsize:    db "unexpected e_phentsize=", 0
     m_exp56:        db " (expected 56)", 0
     m_shentsize:    db "unexpected e_shentsize=", 0
+    m_eiversion:    db "unexpected e_ident version=", 0
+    m_eversion:     db "unexpected e_version=", 0
+    m_exp1:         db " (expected 1)", 0
     m_shstrndx:     db "e_shstrndx=", 0
     m_oorange:      db " out of range (shnum=", 0
     m_phtab:        db "program header table extends past end of file", 10, 0
@@ -1143,6 +1153,11 @@ _start:
     cmp qword [nread], EHDR_SIZE
     jl .truncated
 
+    cmp byte [ehdr + EI_CLASS], ELFCLASS64
+    jne .unsupported
+    cmp byte [ehdr + EI_DATA], ELFDATA2LSB
+    jne .unsupported
+
     cmp byte [disasm_mode], 0
     jne .emit_disasm
     cmp byte [json_mode], 0
@@ -1223,6 +1238,16 @@ _start:
     syscall
     lea rsi, [invalid_msg]
     mov rdx, invalid_len
+    call print_stderr
+    mov edi, 1
+    jmp .exit
+
+.unsupported:
+    mov rdi, r12            ; close fd
+    mov rax, SYS_CLOSE
+    syscall
+    lea rsi, [unsupported_msg]
+    mov rdx, unsupported_len
     call print_stderr
     mov edi, 1
     jmp .exit
@@ -1879,7 +1904,30 @@ validate_structure:
     mov [filesize], rax
 .size_ok:
 
+    ; --- ELF header version fields must be current ---
+    movzx eax, byte [ehdr + EI_VERSION]
+    cmp eax, EV_CURRENT
+    je .chk_e_version
+    VP val_mark
+    VP m_eiversion
+    movzx eax, byte [ehdr + EI_VERSION]
+    call vdec
+    VP m_exp1
+    VP nl
+    inc qword [issues]
+.chk_e_version:
+    cmp dword [ehdr + E_VERSION], EV_CURRENT
+    je .chk_ehsize
+    VP val_mark
+    VP m_eversion
+    mov eax, dword [ehdr + E_VERSION]
+    call vdec
+    VP m_exp1
+    VP nl
+    inc qword [issues]
+
     ; --- e_ehsize == 64 ---
+.chk_ehsize:
     movzx eax, word [ehdr + E_EHSIZE]
     cmp eax, EHDR_SIZE
     je .chk_phentsize

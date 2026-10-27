@@ -2,7 +2,7 @@
 
 [![Coverage](https://codecov.io/gh/ElenaFri/elfcheck/branch/main/graph/badge.svg)](https://codecov.io/gh/ElenaFri/elfcheck)
 
-A lightweight ELF64 inspector for Linux x86-64, written in NASM. It parses headers, segments, sections, symbol and relocation tables; disassembles machine code; and reports dynamic dependencies, structural issues and hardening. Optional JSON output; no libc, direct syscalls only.
+A lightweight ELF64 inspector for Linux x86-64, written in NASM. It accepts ELF64 little-endian files, validates their structure, and parses headers, segments, sections, symbol and relocation tables. It also disassembles machine code and reports dynamic dependencies and hardening. Optional JSON output; no libc, direct syscalls only.
 
 ## Features
 

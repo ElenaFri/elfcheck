@@ -110,11 +110,21 @@ if [[ -r /bin/sh ]]; then
     check "valid ELF prints header (/bin/sh)" 0 "$code" "$ELF_HEADER_HEADING" "$out"
 fi
 
-# 6. Malformed (truncated) ELF -> structural issues reported, exit 2
+# 6. Truncated inputs: a short header is a read error; a cut-off ELF is structural.
+head -c 4 "$BIN" > "$TMP/truncated-header.elf"
+out="$("$RUN_BIN" "$TMP/truncated-header.elf" 2>&1)"; code=$?
+check "truncated ELF header reports a clear error" 1 "$code" "truncated ELF header" "$out"
+
 head -c 8192 "$BIN" > "$TMP/truncated.elf"
 out="$("$RUN_BIN" "$TMP/truncated.elf" 2>&1)"; code=$?
 check "truncated ELF flagged"        2 "$code" "issue(s) found"  "$out"
 check "truncated ELF reports marker" 2 "$code" "[!]"            "$out"
+
+# elfcheck parses ELF64 little-endian structures only; reject other encodings.
+out="$("$RUN_BIN" "$(corrupt_copy class.elf 4 1 1)" 2>&1)"; code=$?
+check "ELF32 input is rejected explicitly" 1 "$code" "only ELF64 little-endian" "$out"
+out="$("$RUN_BIN" "$(corrupt_copy endian.elf 5 2 1)" 2>&1)"; code=$?
+check "big-endian input is rejected explicitly" 1 "$code" "only ELF64 little-endian" "$out"
 
 # 6b. Corrupted header fields (ELF64 offsets): each must be flagged, exit 2.
 #     A fresh unmodified copy must still validate cleanly (control).
@@ -132,6 +142,104 @@ check "bad e_shoff detected"         2 "$code" "section header table extends" "$
 
 out="$("$RUN_BIN" "$(corrupt_copy phoff.elf 32 4000000000 8)" 2>&1)"; code=$?
 check "bad e_phoff detected"         2 "$code" "program header table extends" "$out"
+
+out="$("$RUN_BIN" --validate "$(corrupt_copy shoff-wrap.elf 40 -1 8)" 2>&1)"; code=$?
+check "wrapped section table end is detected" 2 "$code" "section header table extends" "$out"
+out="$("$RUN_BIN" --validate "$(corrupt_copy phoff-wrap.elf 32 -1 8)" 2>&1)"; code=$?
+check "wrapped program table end is detected" 2 "$code" "program header table extends" "$out"
+
+out="$("$RUN_BIN" --validate "$(corrupt_copy phentsize.elf 54 0 2)" 2>&1)"; code=$?
+check "bad e_phentsize is detected" 2 "$code" "unexpected e_phentsize=0" "$out"
+out="$("$RUN_BIN" --validate "$(corrupt_copy shentsize.elf 58 0 2)" 2>&1)"; code=$?
+check "bad e_shentsize is detected" 2 "$code" "unexpected e_shentsize=0" "$out"
+
+out="$("$RUN_BIN" --validate "$(corrupt_copy ident-version.elf 6 0 1)" 2>&1)"; code=$?
+check "bad EI_VERSION is detected" 2 "$code" "unexpected e_ident version=0" "$out"
+out="$("$RUN_BIN" --validate "$(corrupt_copy version.elf 20 0 4)" 2>&1)"; code=$?
+check "bad e_version is detected" 2 "$code" "unexpected e_version=0" "$out"
+
+if command -v python3 >/dev/null 2>&1; then
+    python3 - "$BIN" "$TMP" <<'PY'
+import pathlib
+import struct
+import sys
+
+source = bytearray(pathlib.Path(sys.argv[1]).read_bytes())
+tmp = pathlib.Path(sys.argv[2])
+
+
+def write_fixture(name, mutate):
+    data = bytearray(source)
+    mutate(data)
+    (tmp / name).write_bytes(data)
+
+
+def first_program_header(data, wanted_type):
+    offset = struct.unpack_from('<Q', data, 32)[0]
+    entry_size = struct.unpack_from('<H', data, 54)[0]
+    count = struct.unpack_from('<H', data, 56)[0]
+    for index in range(count):
+        entry = offset + index * entry_size
+        if struct.unpack_from('<I', data, entry)[0] == wanted_type:
+            return entry
+    raise SystemExit(f'program header type {wanted_type} not found')
+
+
+def first_file_backed_section(data):
+    offset = struct.unpack_from('<Q', data, 40)[0]
+    entry_size = struct.unpack_from('<H', data, 58)[0]
+    count = struct.unpack_from('<H', data, 60)[0]
+    for index in range(count):
+        entry = offset + index * entry_size
+        section_type = struct.unpack_from('<I', data, entry + 4)[0]
+        size = struct.unpack_from('<Q', data, entry + 32)[0]
+        if section_type not in (0, 8) and size:
+            return entry
+    raise SystemExit('file-backed section not found')
+
+
+def filesz_exceeds_memsz(data):
+    entry = first_program_header(data, 1)
+    file_size = struct.unpack_from('<Q', data, entry + 32)[0]
+    if not file_size:
+        raise SystemExit('non-empty PT_LOAD not found')
+    struct.pack_into('<Q', data, entry + 40, file_size - 1)
+
+
+def overflowing_segment_range(data):
+    entry = first_program_header(data, 1)
+    struct.pack_into('<Q', data, entry + 8, (1 << 64) - 8)
+    struct.pack_into('<Q', data, entry + 32, 16)
+    struct.pack_into('<Q', data, entry + 40, 16)
+
+
+def overflowing_section_range(data):
+    entry = first_file_backed_section(data)
+    struct.pack_into('<QQ', data, entry + 24, (1 << 64) - 8, 16)
+
+
+def remove_section_table(data):
+    struct.pack_into('<Q', data, 40, 0)
+    struct.pack_into('<H', data, 58, 0)
+    struct.pack_into('<H', data, 60, 0)
+    struct.pack_into('<H', data, 62, 0)
+
+
+write_fixture('segment-filesz.elf', filesz_exceeds_memsz)
+write_fixture('segment-overflow.elf', overflowing_segment_range)
+write_fixture('section-overflow.elf', overflowing_section_range)
+write_fixture('sectionless.elf', remove_section_table)
+PY
+
+    out="$("$RUN_BIN" --validate "$TMP/segment-filesz.elf" 2>&1)"; code=$?
+    check "PT_LOAD filesz greater than memsz is detected" 2 "$code" "p_filesz > p_memsz" "$out"
+    out="$("$RUN_BIN" --validate "$TMP/segment-overflow.elf" 2>&1)"; code=$?
+    check "overflowing segment file range is detected" 2 "$code" "segment 0 extends past end of file" "$out"
+    out="$("$RUN_BIN" --validate "$TMP/section-overflow.elf" 2>&1)"; code=$?
+    check "overflowing section file range is detected" 2 "$code" "extends past end of file" "$out"
+    out="$("$RUN_BIN" --validate "$TMP/sectionless.elf" 2>&1)"; code=$?
+    check "sectionless ELF validates cleanly" 0 "$code" "no structural issues" "$out"
+fi
 
 # 7. JSON output mode
 out="$("$RUN_BIN" --json "$BIN" 2>&1)"; code=$?
