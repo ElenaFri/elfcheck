@@ -167,6 +167,8 @@ hd_scan_gnu_properties:
     push r15
     mov byte [hd_cet_seen], 0
     mov dword [hd_cet_flags], 0
+    lea rax, [note_handler_gnu_property]
+    mov [note_handler], rax
 
     mov rdi, r12
     xor esi, esi
@@ -215,7 +217,7 @@ hd_scan_gnu_properties:
     mov [note_range_off], rax
     mov rax, [phdr + P_FILESZ]
     mov [note_range_size], rax
-    call scan_gnu_note_range
+    call scan_note_range
 .hgp_phdr_next:
     inc r13
     jmp .hgp_phdr_loop
@@ -255,7 +257,7 @@ hd_scan_gnu_properties:
     mov [note_range_off], rax
     mov rax, [shdr + SH_SIZE]
     mov [note_range_size], rax
-    call scan_gnu_note_range
+    call scan_note_range
 .hgp_shdr_next:
     inc r13
     jmp .hgp_shdr_loop
@@ -327,8 +329,11 @@ read_note_at:
     xor eax, eax
     ret
 
-; Parse aligned Elf_Nhdr records in [note_range_off, note_range_size).
-scan_gnu_note_range:
+; Parse aligned Elf_Nhdr records in [note_range_off, note_range_size), calling
+; the installed [note_handler] once per bounds-checked record.  Per record the
+; handler sees note_namesz / note_type / note_desc_size / note_desc_rel and the
+; record position in note_cursor; it must not clobber those or note_record_end.
+scan_note_range:
     mov qword [note_cursor], 0
 .sgnr_loop:
     mov rax, [note_cursor]
@@ -380,23 +385,7 @@ scan_gnu_note_range:
     test eax, eax
     jz .sgnr_done
 
-    cmp dword [note_namesz], 4
-    jne .sgnr_next
-    cmp dword [note_type], NT_GNU_PROPERTY_TYPE_0
-    jne .sgnr_next
-    mov rax, [note_cursor]
-    add rax, 12
-    jc .sgnr_next
-    mov [note_rel], rax
-    mov qword [note_len], 4
-    lea rsi, [note_name]
-    mov edx, 4
-    call read_note_relative
-    cmp eax, 1
-    jne .sgnr_next
-    cmp dword [note_name], 0x00554e47 ; "GNU\0"
-    jne .sgnr_next
-    call scan_gnu_property_desc
+    call [note_handler]
 .sgnr_next:
     mov rax, [note_record_end]
     cmp rax, [note_cursor]
@@ -404,6 +393,29 @@ scan_gnu_note_range:
     mov [note_cursor], rax
     jmp .sgnr_loop
 .sgnr_done:
+    ret
+
+; note_handler_gnu_property - per-record handler: pick NT_GNU_PROPERTY_TYPE_0
+; "GNU" notes and fold their x86 feature flags into hd_cet_*.
+note_handler_gnu_property:
+    cmp dword [note_namesz], 4
+    jne .nhgp_done
+    cmp dword [note_type], NT_GNU_PROPERTY_TYPE_0
+    jne .nhgp_done
+    mov rax, [note_cursor]
+    add rax, 12
+    jc .nhgp_done
+    mov [note_rel], rax
+    mov qword [note_len], 4
+    lea rsi, [note_name]
+    mov edx, 4
+    call read_note_relative
+    cmp eax, 1
+    jne .nhgp_done
+    cmp dword [note_name], 0x00554e47 ; "GNU\0"
+    jne .nhgp_done
+    call scan_gnu_property_desc
+.nhgp_done:
     ret
 
 ; Parse 8-byte-aligned GNU property entries in the current note description.

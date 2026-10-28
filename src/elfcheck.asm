@@ -19,6 +19,7 @@
 %include "elfcheck_symbols.inc"
 %include "elfcheck_dynamic.inc"
 %include "elfcheck_hardening.inc"
+%include "elfcheck_notes.inc"
 %include "elfcheck_helpers.inc"
 %include "elfcheck_json.inc"
 %include "elfcheck_disasm.inc"

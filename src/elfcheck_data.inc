@@ -4,9 +4,9 @@ section .rodata
     usage_msg:      db "Usage: elfcheck [options] <file>", 10
                     db "  Output modes:   --json   --disasm | -d   --function <name>", 10
                     db "  Disasm range:   --start-address <hex> --count <n>", 10
-                    db "  Section filters: --header --segments --sections --validate", 10
-                    db "                   --security --dynamic --hardening --symbols", 10
-                    db "                   --relocs (default report; tables are opt-in)", 10
+                    db "  Section filters: --header --segments --sections --validate --security", 10
+                    db "                   --dynamic --hardening --notes (shown by default)", 10
+                    db "                   --symbols --relocs (opt-in tables)", 10
                     db "  --help | -h     show this help", 10
     usage_len:      equ $ - usage_msg
 
@@ -20,6 +20,7 @@ section .rodata
     opt_hardening:  db "--hardening", 0
     opt_symbols:    db "--symbols", 0
     opt_relocs:     db "--relocs", 0
+    opt_notes:      db "--notes", 0
     opt_help:       db "--help", 0
     opt_help_s:     db "-h", 0
 
@@ -303,6 +304,28 @@ section .rodata
     hd_fortify_fns: db " fortified function(s)", 10, 0
     name_stackchk:  db "__stack_chk_fail", 0
 
+    ; ---- notes (readelf -n) ----
+    notes_title:    db 10, "Notes:", 10, 0
+    notes_none:     db "  (none)", 10, 0
+    note_buildid_lbl: db "  Build ID: ", 0
+    note_abi_lbl:   db "  ABI: ", 0
+    note_props_lbl: db "  Properties: ", 0
+    note_x86_feat:  db "x86 feature: ", 0
+    note_feat_ibt:  db "IBT", 0
+    note_feat_shstk: db "SHSTK", 0
+    note_feat_none: db "none", 0
+    note_owner_lbl: db "  ", 0
+    note_type_lbl:  db ", type ", 0
+    note_descsz_lbl: db ", descsz ", 0
+    note_os_linux:  db "Linux ", 0
+    note_os_gnu:    db "GNU ", 0
+    note_os_solaris: db "Solaris ", 0
+    note_os_freebsd: db "FreeBSD ", 0
+    note_os_netbsd: db "NetBSD ", 0
+    note_os_unknown: db "OS ", 0
+    note_dot:       db ".", 0
+    note_comma_sp:  db ", ", 0
+
     ; ---- program header (segment) type names ----
     pt_null:        db "NULL", 0
     pt_load:        db "LOAD", 0
@@ -400,6 +423,10 @@ section .rodata
     jk_symbol_name: db 34, "symbol_name", 34, ":", 0
     jk_addend:      db 34, "addend", 34, ":", 0
     jk_symbol_table_valid: db 34, "symbol_table_valid", 34, ":", 0
+    jk_notes:       db 34, "notes", 34, ":", 0
+    jk_owner:       db 34, "owner", 34, ":", 0
+    jk_descsz:      db 34, "descsz", 34, ":", 0
+    jk_desc:        db 34, "desc", 34, ":", 0
     jk_hardening:   db 34, "hardening", 34, ":", 0
     jk_relro:       db 34, "relro", 34, ":", 0
     jk_canary:      db 34, "stack_canary", 34, ":", 0
@@ -829,6 +856,12 @@ section .bss
     note_type:      resd 1
     note_read_buf:  resq 1
     note_read_size: resq 1
+    note_handler:   resq 1             ; per-record callback for scan_note_range
+    note_count:     resq 1             ; notes printed so far (for "(none)")
+    note_ranges_seen: resq 1           ; SHT_NOTE ranges found (segment fallback)
+    note_desc_staged: resq 1           ; bytes staged into note_desc_buf
+    note_owner:     resb 36            ; note name/owner string (NUL-terminated)
+    note_desc_buf:  resb NOTE_DESC_CAP  ; staged note description bytes
     note_header:    resb 12
     note_name:      resb 4
     note_prop_header: resb 8

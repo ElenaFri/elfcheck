@@ -387,6 +387,34 @@ def compare_relocation_tables(
             )
 
 
+def parse_notes(text):
+    """Extract the semantically comparable GNU notes from `readelf -n` output."""
+    result = {}
+    build = re.search(r"Build ID:\s*([0-9a-fA-F]+)", text)
+    if build:
+        result["build_id"] = build.group(1).lower()
+    abi = re.search(r"OS:\s*(\S+),\s*ABI:\s*(\d+)\.(\d+)\.(\d+)", text)
+    if abi:
+        result["abi"] = f"{abi.group(1)} {abi.group(2)}.{abi.group(3)}.{abi.group(4)}"
+    return result
+
+
+def compare_notes(path, report, expected):
+    by_type = {}
+    for note in report.get("notes", []):
+        by_type.setdefault(note.get("type"), note)
+    if "build_id" in expected:
+        note = by_type.get(3)
+        if note is None or "desc" not in note:
+            raise ValueError(f"{path}: elfcheck is missing the build-id note")
+        require_equal(path, "note build-id", str(note["desc"]).lower(), expected["build_id"])
+    if "abi" in expected:
+        note = by_type.get(1)
+        if note is None or "desc" not in note:
+            raise ValueError(f"{path}: elfcheck is missing the ABI-tag note")
+        require_equal(path, "note abi", note["desc"], expected["abi"])
+
+
 def compare_file(runner, readelf, path, env):
     output = run([runner, "--json", path], env)
     try:
@@ -474,6 +502,9 @@ def compare_file(runner, readelf, path, env):
         expected_sections,
         expected_symbol_tables,
     )
+
+    notes_output = run([readelf, "-n", path], env)
+    compare_notes(path, report, parse_notes(notes_output))
 
     symbol_count = sum(table["entry_count"] for table in expected_symbol_tables)
     relocation_count = sum(table["entry_count"] for table in expected_relocation_tables)

@@ -19,6 +19,8 @@ print_json:
     PRINT j_comma
     call json_dynamic
     PRINT j_comma
+    call json_notes
+    PRINT j_comma
     call json_hardening
     PRINT j_rbrace
     PRINT nl
@@ -643,6 +645,99 @@ json_cet_status:
     lea rsi, [jv_unknown]
 .jcs_emit:
     call jname
+    ret
+
+; json_notes - "notes":[{"owner":..,"type":N,"descsz":N,"desc":..},..]
+; Reuses the shared note walker with a JSON-emitting per-record handler.
+json_notes:
+    PRINT jk_notes
+    PRINT j_lbrack
+    mov qword [note_count], 0
+    mov qword [note_ranges_seen], 0
+    lea rax, [note_handler_json]
+    mov [note_handler], rax
+    mov rdi, r12
+    xor esi, esi
+    mov edx, SEEK_END
+    mov eax, SYS_LSEEK
+    syscall
+    test rax, rax
+    js .jnt_close
+    mov [filesize], rax
+    call notes_scan_sections
+    cmp qword [note_ranges_seen], 0
+    jne .jnt_close
+    call notes_scan_segments
+.jnt_close:
+    PRINT j_rbrack
+    ret
+
+; note_handler_json - per-record handler: emit one JSON object for the note.
+note_handler_json:
+    push rbx
+    cmp qword [note_count], 0
+    je .njson_first
+    PRINT j_comma
+.njson_first:
+    inc qword [note_count]
+    call note_read_owner
+    call note_stage_desc
+    PRINT j_lbrace
+    PRINT jk_owner
+    lea rsi, [note_owner]
+    call jstr
+    PRINT j_comma
+    PRINT jk_type
+    mov eax, dword [note_type]
+    call print_dec
+    PRINT j_comma
+    PRINT jk_descsz
+    mov rax, [note_desc_size]
+    call print_dec
+    cmp dword [note_owner], 0x00554e47   ; "GNU\0"
+    jne .njson_end
+    mov eax, [note_type]
+    cmp eax, NT_GNU_BUILD_ID
+    je .njson_buildid
+    cmp eax, NT_GNU_ABI_TAG
+    je .njson_abi
+    jmp .njson_end
+.njson_buildid:
+    PRINT j_comma
+    PRINT jk_desc
+    PRINT j_quote
+    xor ebx, ebx
+.njb_loop:
+    cmp rbx, [note_desc_staged]
+    jae .njb_done
+    lea rdx, [note_desc_buf]
+    mov al, [rdx + rbx]
+    call print_byte_hex
+    inc rbx
+    jmp .njb_loop
+.njb_done:
+    PRINT j_quote
+    jmp .njson_end
+.njson_abi:
+    cmp qword [note_desc_staged], 16
+    jb .njson_end
+    PRINT j_comma
+    PRINT jk_desc
+    PRINT j_quote
+    mov eax, dword [note_desc_buf]
+    call note_print_os
+    mov eax, dword [note_desc_buf + 4]
+    call print_dec
+    PRINT note_dot
+    mov eax, dword [note_desc_buf + 8]
+    call print_dec
+    PRINT note_dot
+    mov eax, dword [note_desc_buf + 12]
+    call print_dec
+    PRINT j_quote
+.njson_end:
+    PRINT j_rbrace
+    pop rbx
     ret
 
 ; ---------------------------------------------------------------------------

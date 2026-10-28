@@ -105,6 +105,7 @@ _start:
     FILTARG opt_hardening, FILT_HARDENING
     FILTARG opt_symbols,   FILT_SYMBOLS
     FILTARG opt_relocs,    FILT_RELOCS
+    FILTARG opt_notes,     FILT_NOTES
     mov rsi, [r9 + rcx*8]
     test r10, r10            ; otherwise it's the path (only one allowed)
     jnz .usage
@@ -205,8 +206,12 @@ _start:
     call analyze_dynamic       ; needed libraries + imported symbols
 .f_hard:
     test dword [eff_mask], FILT_HARDENING
-    jz .after_output
+    jz .f_notes
     call check_hardening       ; exploit-mitigation posture (checksec-style)
+.f_notes:
+    test dword [eff_mask], FILT_NOTES
+    jz .after_output
+    call print_notes           ; decode ELF notes (build-id, ABI tag, properties)
     jmp .after_output
 .emit_json:
     call print_json            ; emits everything + counts [issues]

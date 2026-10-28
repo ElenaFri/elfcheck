@@ -1007,7 +1007,27 @@ if command -v gcc >/dev/null 2>&1; then
         out="$("$RUN_BIN" "$TMP/runpath.elf" 2>&1)"; code=$?
         check "hardening detects RUNPATH"  0 "$code" "RUNPATH:       /opt/y" "$out"
     fi
+    if [[ -r "$TMP/cet-full.elf" ]]; then
+        out="$("$RUN_BIN" --notes "$TMP/cet-full.elf" 2>&1)"; code=$?
+        check "--notes lists the GNU property note" 0 "$code" "x86 feature: IBT, SHSTK" "$out"
+        check "--notes decodes the ABI tag"         0 "$code" "ABI: Linux" "$out"
+        check "--notes prints a build ID"           0 "$code" "Build ID: " "$out"
+        if command -v readelf >/dev/null 2>&1; then
+            rid="$(LC_ALL=C readelf -n "$TMP/cet-full.elf" | grep -oiE 'Build ID: [0-9a-f]+' | awk '{print $3}')"
+            if [[ -n "$rid" ]]; then
+                check "--notes build ID matches readelf" 0 "$code" "Build ID: $rid" "$out"
+            fi
+        fi
+        out="$("$RUN_BIN" --json "$TMP/cet-full.elf" 2>&1)"; code=$?
+        check "JSON includes a notes array" 0 "$code" '"notes":[' "$out"
+    fi
 fi
+
+# ELF notes on the freestanding binary (no notes present)
+out="$("$RUN_BIN" --notes "$BIN" 2>&1)"; code=$?
+check        "--notes shows a Notes section"          0 "$code" "Notes:"  "$out"
+check        "--notes reports none when absent"       0 "$code" "(none)"  "$out"
+check_absent "--notes hides the header"               0 "$code" "$ELF_HEADER_HEADING" "$out"
 
 # 14. CLI section filters and help
 out="$("$RUN_BIN" --help 2>&1)"; code=$?
@@ -1017,6 +1037,7 @@ check "--help documents --relocs"        0 "$code" "--relocs" "$out"
 check "--help documents --function"      0 "$code" "--function <name>" "$out"
 check "--help documents --start-address" 0 "$code" "--start-address <hex>" "$out"
 check "--help documents --count"          0 "$code" "--count <n>" "$out"
+check "--help documents --notes"          0 "$code" "--notes" "$out"
 out="$("$RUN_BIN" -h 2>&1)"; code=$?
 check "-h alias prints usage, exit 0"     0 "$code" "$USAGE_HEADING" "$out"
 
@@ -1045,6 +1066,7 @@ check "filter keeps exit code on malformed" 2 "$code" "" "$out"
 out="$("$RUN_BIN" "$BIN" 2>&1)"; code=$?
 check "default shows header"              0 "$code" "$ELF_HEADER_HEADING" "$out"
 check "default shows hardening"           0 "$code" "$HARDENING_HEADING"  "$out"
+check "default shows notes"               0 "$code" "Notes:"             "$out"
 
 # 15. Compare parsed header and tables against GNU readelf output.
 if command -v python3 >/dev/null 2>&1 && command -v readelf >/dev/null 2>&1; then

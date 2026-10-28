@@ -27,6 +27,7 @@ A lightweight ELF64 inspector for Linux x86-64, written in NASM. It accepts ELF6
 - [x] Display static and dynamic symbol tables, including GNU symbol versions
 - [x] Display REL/RELA relocation entries and resolve symbol names
 - [x] Report RELRO, NX, PIE and GNU x86 CET (IBT/SHSTK) hardening properties
+- [x] Decode ELF notes: GNU build-id, ABI tag and x86 feature properties
 
 ## Requirements
 
@@ -117,12 +118,13 @@ and relocation tables are opt-in because they can be large:
 ```bash
 ./elfcheck --hardening <file>            # just the hardening report
 ./elfcheck --header --dynamic <file>     # header + dynamic linking only
+./elfcheck --notes <file>                # GNU build-id, ABI tag and properties
 ./elfcheck --symbols <file>              # static and dynamic symbol tables
 ./elfcheck --relocs <file>               # REL/RELA relocations and symbols
 ```
 
 Available filters: `--header`, `--segments`, `--sections`, `--validate`,
-`--security`, `--dynamic`, `--hardening`, `--symbols`, `--relocs`. Symbol and
+`--security`, `--dynamic`, `--hardening`, `--notes`, `--symbols`, `--relocs`. Symbol and
 relocation tables are opt-in because they can be large; `--json` always includes
 them under `symbol_tables` and `relocation_tables`. Structural validation always
 runs so the exit code stays meaningful, even when its section is hidden. Filters

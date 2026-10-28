@@ -54,7 +54,10 @@
 %define PT_GNU_RELRO 0x6474e552
 %define PT_GNU_PROPERTY 0x6474e553
 %define SHT_NOTE     7
+%define NT_GNU_ABI_TAG  1
+%define NT_GNU_BUILD_ID 3
 %define NT_GNU_PROPERTY_TYPE_0 5
+%define NOTE_DESC_CAP   256
 %define GNU_PROPERTY_X86_FEATURE_1_AND 0xc0000002
 %define GNU_PROPERTY_X86_FEATURE_1_IBT 1
 %define GNU_PROPERTY_X86_FEATURE_1_SHSTK 2
@@ -84,7 +87,8 @@
 %define FILT_HARDENING 64
 %define FILT_SYMBOLS   128
 %define FILT_RELOCS    256
-%define FILT_DEFAULT   0x7f
+%define FILT_NOTES     512
+%define FILT_DEFAULT   0x27f
 
 ; ---- program header table column widths ----
 %define W_IDX       5
