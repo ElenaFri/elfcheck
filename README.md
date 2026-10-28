@@ -28,6 +28,7 @@ A lightweight ELF64 inspector for Linux x86-64, written in NASM. It accepts ELF6
 - [x] Display REL/RELA relocation entries and resolve symbol names
 - [x] Report RELRO, NX, PIE and GNU x86 CET (IBT/SHSTK) hardening properties
 - [x] Decode ELF notes: GNU build-id, ABI tag and x86 feature properties
+- [x] Triage mode: flag anomalies by severity with a CI-friendly exit code
 
 ## Requirements
 
@@ -152,5 +153,21 @@ GNU property is absent; this does not prove runtime CPU or loader enforcement.
 The report is mirrored under `"hardening"` in `--json` output and, like
 `Security:`, is advisory and does not change the exit code.
 
-Exit codes: `0` valid with no structural issues, `1` usage/read error or not an
-ELF file, `2` valid ELF header but structural inconsistencies were found.
+For a quick verdict, `--triage` (or `-t`) runs a single pass that flags
+anomalies ranked by severity (`HIGH`/`MED`/`LOW`/`INFO`) and ends with a
+summary line:
+
+```bash
+./elfcheck --triage <file>   # or: ./elfcheck -t <file>
+```
+
+`HIGH`/`MED` cover dangerous or weird traits (structural corruption, `W^X`
+segments/sections, an executable stack, text relocations, an out-of-bounds entry
+point); `LOW`/`INFO` cover hardening policy (no RELRO/PIE/canary/CET,
+`RPATH`/`RUNPATH`, a stripped symbol/section table). The process **exits 2 when
+any HIGH or MEDIUM finding is present** and 0 otherwise, so `elfcheck -t file`
+gates a build or deploy pipeline without parsing text.
+
+Exit codes: `0` valid with no structural issues (and no HIGH/MED triage
+finding), `1` usage/read error or not an ELF file, `2` structural
+inconsistencies were found, or a HIGH/MED triage finding tripped the gate.

@@ -8,6 +8,7 @@ _start:
     xor r10, r10              ; path pointer (NULL until found)
     mov byte [json_mode], 0
     mov byte [disasm_mode], 0
+    mov byte [triage_mode], 0
     mov byte [help_mode], 0
     mov byte [disasm_error], 0
     mov qword [function_name], 0
@@ -23,6 +24,8 @@ _start:
     MODEARG opt_json,     json_mode
     MODEARG opt_disasm,   disasm_mode
     MODEARG opt_disasm_s, disasm_mode
+    MODEARG opt_triage,   triage_mode
+    MODEARG opt_triage_s, triage_mode
     MODEARG opt_help,     help_mode
     MODEARG opt_help_s,   help_mode
     mov rsi, [r9 + rcx*8]
@@ -157,6 +160,8 @@ _start:
 
     cmp byte [disasm_mode], 0
     jne .emit_disasm
+    cmp byte [triage_mode], 0
+    jne .emit_triage
     cmp byte [json_mode], 0
     jne .emit_json
     ; --- text report: run only the selected sections (empty mask = all) ---
@@ -216,6 +221,9 @@ _start:
 .emit_json:
     call print_json            ; emits everything + counts [issues]
     jmp .after_output
+.emit_triage:
+    call run_triage            ; severity-ranked anomaly scan; sets [tri_fail]
+    jmp .after_triage
 .emit_disasm:
     call disassemble           ; disassemble .text; leaves [issues] at 0
 .after_output:
@@ -231,6 +239,16 @@ _start:
     jmp .exit
 .disasm_failed:
     mov edi, 1
+    jmp .exit
+
+.after_triage:
+    mov rdi, r12            ; close fd
+    mov rax, SYS_CLOSE
+    syscall
+    xor edi, edi            ; exit 0 unless a HIGH/MED finding tripped the gate
+    cmp byte [tri_fail], 0
+    je .exit
+    mov edi, 2
     jmp .exit
 
 .invalid:

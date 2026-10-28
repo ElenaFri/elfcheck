@@ -1090,6 +1090,56 @@ else
     echo "  SKIP: readelf differential tests require Python 3 and GNU readelf"
 fi
 
+# 16. Triage mode (--triage / -t): severity-ranked anomaly scan + CI gate.
+out="$("$RUN_BIN" --triage "$BIN" 2>&1)"; code=$?
+check "triage shows Triage heading"        0 "$code" "Triage:"   "$out"
+check "triage prints a summary line"       0 "$code" "Summary:"  "$out"
+check_absent "triage: clean self has no HIGH" 0 "$code" "[HIGH]" "$out"
+
+out="$("$RUN_BIN" -t "$BIN" 2>&1)"; code=$?
+check "-t alias shows Triage heading"      0 "$code" "Triage:"   "$out"
+
+# structural problems -> HIGH finding, exit 2 (CI gate trips)
+out="$("$RUN_BIN" --triage "$TMP/truncated.elf" 2>&1)"; code=$?
+check "triage flags structural issue HIGH" 2 "$code" "[HIGH]"     "$out"
+check "triage gate fails on structural"    2 "$code" "structural" "$out"
+
+# non-ELF is still a hard error (exit 1), not a triage result
+out="$("$RUN_BIN" --triage "$TMP/plain.txt" 2>&1)"; code=$?
+check "triage rejects non-ELF"             1 "$code" "not an ELF" "$out"
+
+# --help documents the mode
+out="$("$RUN_BIN" --help 2>&1)"; code=$?
+check "--help documents --triage"          0 "$code" "--triage"  "$out"
+
+# crafted-fixture severities (reuse fixtures built earlier when available)
+if [[ -r "$TMP/wx.elf" ]]; then
+    out="$("$RUN_BIN" --triage "$TMP/wx.elf" 2>&1)"; code=$?
+    check "triage flags W^X segment HIGH"   2 "$code" "W^X"        "$out"
+fi
+if [[ -r "$TMP/wxsect.elf" ]]; then
+    out="$("$RUN_BIN" --triage "$TMP/wxsect.elf" 2>&1)"; code=$?
+    check "triage flags W+X section MED"     2 "$code" "[MED]"      "$out"
+fi
+if [[ -r "$TMP/badentry.elf" ]]; then
+    out="$("$RUN_BIN" --triage "$TMP/badentry.elf" 2>&1)"; code=$?
+    check "triage flags bad entry point MED" 2 "$code" "entry point not inside" "$out"
+fi
+if [[ -r "$TMP/noshdr.elf" ]]; then
+    out="$("$RUN_BIN" --triage "$TMP/noshdr.elf" 2>&1)"; code=$?
+    check "triage flags stripped sections LOW" 0 "$code" "no section headers" "$out"
+    check_absent "triage: stripped sections do not gate CI" 0 "$code" "[HIGH]" "$out"
+fi
+if [[ -r "$TMP/es.elf" ]]; then
+    out="$("$RUN_BIN" --triage "$TMP/es.elf" 2>&1)"; code=$?
+    check "triage flags executable stack HIGH" 2 "$code" "executable stack" "$out"
+fi
+if [[ -r "$TMP/nopie.elf" ]]; then
+    out="$("$RUN_BIN" --triage "$TMP/nopie.elf" 2>&1)"; code=$?
+    check "triage reports no-PIE as LOW"     0 "$code" "no PIE"     "$out"
+    check_absent "triage: no-PIE does not gate CI" 0 "$code" "[HIGH]" "$out"
+fi
+
 echo
 echo "Results: $pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

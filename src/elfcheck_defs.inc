@@ -70,12 +70,20 @@
 %define ET_EXEC      2
 %define ET_DYN       3
 %define DT_RPATH     15
+%define DT_TEXTREL   22
 %define DT_BIND_NOW  24
 %define DT_RUNPATH   29
 %define DT_FLAGS     30
 %define DT_FLAGS_1   0x6ffffffb
 %define DF_BIND_NOW  0x8
+%define DF_TEXTREL   0x4
 %define DF_1_NOW     0x1
+
+; ---- triage severity levels (see run_triage) ----
+%define SEV_HIGH 0
+%define SEV_MED  1
+%define SEV_LOW  2
+%define SEV_INFO 3
 
 ; ---- section-selection filter bits (0 = use the standard report) ----
 %define FILT_HEADER    1
@@ -193,5 +201,12 @@ default rel
     or dword [filter_mask], %2
     jmp .arg_next
 %%skip:
+%endmacro
+
+; FINDING: emit one triage finding with severity %1 and message label %2.
+%macro FINDING 2
+    lea rsi, [%2]
+    mov al, %1
+    call tri_finding
 %endmacro
 

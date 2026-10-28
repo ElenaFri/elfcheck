@@ -505,9 +505,10 @@ hd_print_cet_status:
     VP hd_unknown_cet
     ret
 
-; hd_scan_dynamic - read DT_RPATH/RUNPATH/BIND_NOW/FLAGS(_1) from .dynamic
+; hd_scan_dynamic - read DT_RPATH/RUNPATH/BIND_NOW/FLAGS(_1)/TEXTREL from .dynamic
 hd_scan_dynamic:
     mov byte [hd_bindnow], 0
+    mov byte [hd_textrel], 0
     mov qword [hd_flags1], 0
     mov qword [hd_rpath_off], -1
     mov qword [hd_runpath_off], -1
@@ -564,14 +565,23 @@ hd_scan_dynamic:
     mov byte [hd_bindnow], 1
     jmp .sd_next
 .sd_t3:
-    cmp rax, DT_FLAGS
+    cmp rax, DT_TEXTREL
     jne .sd_t4
+    mov byte [hd_textrel], 1
+    jmp .sd_next
+.sd_t4:
+    cmp rax, DT_FLAGS
+    jne .sd_t5
     mov rax, [dynent + 8]
+    test rax, DF_TEXTREL
+    jz .sd_flags_bn
+    mov byte [hd_textrel], 1
+.sd_flags_bn:
     test rax, DF_BIND_NOW
     jz .sd_next
     mov byte [hd_bindnow], 1
     jmp .sd_next
-.sd_t4:
+.sd_t5:
     cmp rax, DT_FLAGS_1
     jne .sd_next
     mov rax, [dynent + 8]

@@ -3,6 +3,7 @@ section .rodata
 
     usage_msg:      db "Usage: elfcheck [options] <file>", 10
                     db "  Output modes:   --json   --disasm | -d   --function <name>", 10
+                    db "                   --triage | -t  (flag anomalies, exit 2 on HIGH/MED)", 10
                     db "  Disasm range:   --start-address <hex> --count <n>", 10
                     db "  Section filters: --header --segments --sections --validate --security", 10
                     db "                   --dynamic --hardening --notes (shown by default)", 10
@@ -807,6 +808,36 @@ section .rodata
     opt_function:   db "--function", 0
     opt_start_address: db "--start-address", 0
     opt_count:      db "--count", 0
+    opt_triage:     db "--triage", 0
+    opt_triage_s:   db "-t", 0
+
+    ; ---- triage mode (severity-ranked anomaly scan) ----
+    tri_title:      db "Triage:", 10, 0
+    tri_lbl_high:   db "  [HIGH]   ", 0
+    tri_lbl_med:    db "  [MED]    ", 0
+    tri_lbl_low:    db "  [LOW]    ", 0
+    tri_lbl_info:   db "  [INFO]   ", 0
+    tri_m_struct:   db "structural inconsistencies in ELF layout", 0
+    tri_m_wxseg:    db "writable and executable PT_LOAD segment (W^X)", 0
+    tri_m_xstack:   db "executable stack (PT_GNU_STACK is RWX)", 0
+    tri_m_textrel:  db "text relocations (code patched at load time)", 0
+    tri_m_wxsect:   db "writable and executable section", 0
+    tri_m_entry:    db "entry point not inside any executable segment", 0
+    tri_m_noshdr:   db "no section headers (table stripped)", 0
+    tri_m_norelro:  db "no RELRO (GOT is writable)", 0
+    tri_m_partrelro: db "partial RELRO (GOT not fully protected)", 0
+    tri_m_nopie:    db "no PIE (fixed load address)", 0
+    tri_m_nocanary: db "no stack canary", 0
+    tri_m_nocet:    db "CET not fully enabled (IBT/SHSTK)", 0
+    tri_m_rpath:    db "RPATH set (insecure library search path)", 0
+    tri_m_runpath:  db "RUNPATH set (library search path override)", 0
+    tri_m_stripped: db "no symbol table (.symtab stripped)", 0
+    tri_clean:      db "  Clean: no anomalies detected.", 10, 0
+    tri_sum_pre:    db "  Summary: ", 0
+    tri_sum_high:   db " high, ", 0
+    tri_sum_med:    db " medium, ", 0
+    tri_sum_low:    db " low, ", 0
+    tri_sum_info:   db " info", 10, 0
 
 section .bss
     ehdr:           resb EHDR_SIZE     ; full ELF header
@@ -889,6 +920,13 @@ section .bss
     disasm_remaining: resq 1           ; instructions remaining in bounded report
     filter_mask:    resd 1             ; selected section bits (0 = use default sections)
     eff_mask:       resd 1             ; effective mask used while printing
+    triage_mode:    resb 1             ; 1 = run the triage anomaly scan
+    hd_textrel:     resb 1             ; 1 = DT_TEXTREL / DF_TEXTREL set (text relocs)
+    tri_high:       resq 1             ; triage findings by severity
+    tri_med:        resq 1
+    tri_low:        resq 1
+    tri_info:       resq 1
+    tri_fail:       resb 1             ; 1 = triage CI gate tripped (exit 2)
     silent:         resb 1             ; 1 = validate_structure suppresses output
     jbuf:           resb 8             ; scratch for JSON byte escaping
 
