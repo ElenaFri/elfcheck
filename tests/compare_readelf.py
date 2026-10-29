@@ -415,6 +415,54 @@ def compare_notes(path, report, expected):
         require_equal(path, "note abi", note["desc"], expected["abi"])
 
 
+DYNAMIC_ENTRY = re.compile(
+    r"^\s*0x([0-9a-fA-F]+)\s+\(([^)]*)\)\s*(.*?)\s*$"
+)
+
+
+def parse_dynamic_value(text):
+    """Return (number_or_None, bracketed_name_or_None) for a readelf value cell."""
+    bracket = re.search(r"\[([^\]]*)\]", text)
+    name = bracket.group(1) if bracket else None
+    hex_match = re.fullmatch(r"0x[0-9a-fA-F]+", text)
+    if hex_match:
+        return int(text, 16), name
+    bytes_match = re.fullmatch(r"(\d+)\s*\(bytes\)", text)
+    if bytes_match:
+        return int(bytes_match.group(1)), name
+    if re.fullmatch(r"\d+", text):
+        return int(text), name
+    return None, name
+
+
+def parse_dynamic_entries(text):
+    """Parse `readelf -dW` into an ordered list of dynamic entries."""
+    rows = []
+    for line in text.splitlines():
+        match = DYNAMIC_ENTRY.match(line)
+        if match is None:
+            continue
+        value, name = parse_dynamic_value(match.group(3))
+        rows.append({"tag": int(match.group(1), 16), "value": value, "name": name})
+    return rows
+
+
+def compare_dynamic_entries(path, report, expected):
+    actual = report.get("dynamic", {}).get("entries", [])
+    require_equal(path, "dynamic entry count", len(actual), len(expected))
+    for index, (got, want) in enumerate(zip(actual, expected)):
+        require_equal(path, f"dynamic entry {index} tag", int(got["tag"]), want["tag"])
+        if want["value"] is not None:
+            require_equal(
+                path, f"dynamic entry {index} value", int(got["value"]), want["value"]
+            )
+        if want["name"] is not None:
+            require_equal(
+                path, f"dynamic entry {index} name", got.get("name"), want["name"]
+            )
+    return len(actual)
+
+
 def compare_file(runner, readelf, path, env):
     output = run([runner, "--json", path], env)
     try:
@@ -506,6 +554,11 @@ def compare_file(runner, readelf, path, env):
     notes_output = run([readelf, "-n", path], env)
     compare_notes(path, report, parse_notes(notes_output))
 
+    dynamic_output = run([readelf, "-dW", path], env)
+    dynamic_count = compare_dynamic_entries(
+        path, report, parse_dynamic_entries(dynamic_output)
+    )
+
     symbol_count = sum(table["entry_count"] for table in expected_symbol_tables)
     relocation_count = sum(table["entry_count"] for table in expected_relocation_tables)
     return (
@@ -513,6 +566,7 @@ def compare_file(runner, readelf, path, env):
         len(actual_sections),
         symbol_count,
         relocation_count,
+        dynamic_count,
     )
 
 
@@ -531,13 +585,18 @@ def main():
     failures = 0
     for path in paths:
         try:
-            program_count, section_count, symbol_count, relocation_count = compare_file(
-                runner, readelf, path, env
-            )
+            (
+                program_count,
+                section_count,
+                symbol_count,
+                relocation_count,
+                dynamic_count,
+            ) = compare_file(runner, readelf, path, env)
             print(
                 f"readelf differential: matched {path} "
                 f"({program_count} program headers, {section_count} sections, "
-                f"{symbol_count} symbols, {relocation_count} relocations)"
+                f"{symbol_count} symbols, {relocation_count} relocations, "
+                f"{dynamic_count} dynamic entries)"
             )
         except (OSError, subprocess.TimeoutExpired, ValueError, KeyError) as error:
             print(f"readelf differential: mismatch: {error}", file=sys.stderr)

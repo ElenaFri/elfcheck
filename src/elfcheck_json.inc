@@ -377,6 +377,10 @@ json_dynamic:
 .jd_static:
     PRINT j_true
     PRINT j_comma
+    PRINT jk_entries
+    PRINT j_lbrack
+    PRINT j_rbrack
+    PRINT j_comma
     PRINT jk_needed
     PRINT j_lbrack
     PRINT j_rbrack
@@ -396,6 +400,11 @@ json_dynamic:
     mov [dyn_link], eax
     mov eax, dword [dyn_link]
     call load_dynstr
+    PRINT j_comma
+    PRINT jk_entries
+    PRINT j_lbrack
+    call json_dynamic_entries
+    PRINT j_rbrack
     PRINT j_comma
     PRINT jk_needed
     PRINT j_lbrack
@@ -422,6 +431,74 @@ json_dynamic:
 .jd_noimp:
     PRINT j_rbrack
     PRINT j_rbrace
+    ret
+
+; json_dynamic_entries - emit [{"tag":N,"type":"NAME","value":N[,"name":..]}]
+;   for every .dynamic entry, stopping after the DT_NULL terminator.
+json_dynamic_entries:
+    mov r14, [dyn_size]
+    shr r14, 4
+    xor r13, r13
+    xor rbx, rbx               ; emitted count (for comma placement)
+.jde_loop:
+    cmp r13, r14
+    jae .jde_done
+    mov rax, r13
+    shl rax, 4
+    add rax, [dyn_off]
+    mov rdi, r12
+    mov rsi, rax
+    xor edx, edx
+    mov rax, SYS_LSEEK
+    syscall
+    mov rdi, r12
+    lea rsi, [dynent]
+    mov rdx, 16
+    mov rax, SYS_READ
+    syscall
+    cmp rax, 16
+    jl .jde_done
+    test rbx, rbx
+    jz .jde_nocomma
+    PRINT j_comma
+.jde_nocomma:
+    PRINT j_lbrace
+    PRINT jk_tag
+    mov rax, [dynent]
+    call print_dec
+    PRINT j_comma
+    PRINT jk_type
+    mov rax, [dynent]
+    call dyn_tag_name          ; rsi -> name
+    call jstr
+    PRINT j_comma
+    PRINT jk_value
+    mov rax, [dynent + 8]
+    call print_dec
+    mov rax, [dynent]          ; string-valued tags add a resolved "name"
+    cmp rax, 1                 ; NEEDED
+    je .jde_name
+    cmp rax, 14                ; SONAME
+    je .jde_name
+    cmp rax, 15                ; RPATH
+    je .jde_name
+    cmp rax, 29                ; RUNPATH
+    je .jde_name
+    jmp .jde_close
+.jde_name:
+    PRINT j_comma
+    PRINT jk_name
+    mov rax, [dynent + 8]
+    call dynstr_name_ptr
+    call jstr
+.jde_close:
+    PRINT j_rbrace
+    inc rbx
+    cmp qword [dynent], 0      ; DT_NULL terminates the array
+    je .jde_done
+    inc r13
+    jmp .jde_loop
+.jde_done:
     ret
 
 ; json_needed_arr - emit comma-separated JSON strings for DT_NEEDED libs

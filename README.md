@@ -24,6 +24,7 @@ A lightweight ELF64 inspector for Linux x86-64, written in NASM. It accepts ELF6
 - [x] Detect potentially suspicious ELF properties
 - [x] Check segment permissions and executable stack settings
 - [x] Identify imported functions and dynamic dependencies
+- [x] Dump the full `.dynamic` tag table (readelf -d equivalent)
 - [x] Display static and dynamic symbol tables, including GNU symbol versions
 - [x] Display REL/RELA relocation entries and resolve symbol names
 - [x] Report RELRO, NX, PIE and GNU x86 CET (IBT/SHSTK) hardening properties
@@ -140,9 +141,13 @@ advisory and do not change the exit code.
 
 A `Dynamic:` section reports the shared libraries the file depends on (`DT_NEEDED`)
 and imported symbols with GNU versions (`name@VERSION`); default exported
-versions use `name@@VERSION`. In `--json`, each `.dynsym` entry has a `version`
-object (or `null`) with its name, index, required/defined kind, provider library,
-and GNU hidden-version flag.
+versions use `name@@VERSION`. Passing `--dynamic` additionally prints the full
+`.dynamic` tag table (the `readelf -d` equivalent), with `DT_*` tag names and
+string-valued tags (`NEEDED`/`SONAME`/`RPATH`/`RUNPATH`) resolved. In `--json`,
+the `dynamic` object always carries an `entries` array of `{tag, type, value}`
+(plus `name` for string tags), and each `.dynsym` entry has a `version` object
+(or `null`) with its name, index, required/defined kind, provider library, and
+GNU hidden-version flag.
 
 Finally, a `Hardening:` section summarises the binary's exploit-mitigation
 posture, checksec-style: `RELRO` (none/partial/full), stack canary, `NX`

@@ -924,6 +924,14 @@ check "self reported statically linked"   0 "$code" "statically linked"   "$out"
 out="$("$RUN_BIN" --json "$BIN" 2>&1)"; code=$?
 check "--json has dynamic object"         0 "$code" '"dynamic":{'         "$out"
 check "--json self is static"             0 "$code" '"static":true'       "$out"
+check "--json self has empty entries"     0 "$code" '"entries":[]'        "$out"
+
+# The full .dynamic tag dump is opt-in (explicit --dynamic), not in the default
+# report, to keep the default output lean.
+out="$("$RUN_BIN" "$BIN" 2>&1)"; code=$?
+check_absent "default report hides .dynamic dump" 0 "$code" "Dynamic section entries:" "$out"
+out="$("$RUN_BIN" --dynamic "$BIN" 2>&1)"; code=$?
+check "static --dynamic stays statically linked" 0 "$code" "statically linked" "$out"
 
 # A dynamically-linked system ELF must list its libraries and imports.
 if [[ -r /bin/ls ]]; then
@@ -934,11 +942,23 @@ if [[ -r /bin/ls ]]; then
     check "dynamic finds a known import"   0 "$code" "getenv"             "$out"
     check "dynamic import includes GNU version" 0 "$code" "getenv@GLIBC_" "$out"
 
+    # Full .dynamic tag dump (readelf -d equivalent) under explicit --dynamic.
+    out="$("$RUN_BIN" --dynamic /bin/ls 2>&1)"; code=$?
+    check "--dynamic shows the .dynamic dump" 0 "$code" "Dynamic section entries:" "$out"
+    check "--dynamic decodes NEEDED tag"      0 "$code" "NEEDED"   "$out"
+    check "--dynamic decodes STRTAB tag"      0 "$code" "STRTAB"   "$out"
+    check "--dynamic decodes GNU_HASH tag"    0 "$code" "GNU_HASH" "$out"
+    check "--dynamic prints the NULL terminator" 0 "$code" "NULL"  "$out"
+
     out="$("$RUN_BIN" --json /bin/ls 2>&1)"; code=$?
     check "--json dynamic is not static"   0 "$code" '"static":false'      "$out"
     check "--json lists needed array"      0 "$code" '"needed":['          "$out"
     check "--json lists a needed lib"      0 "$code" '"libc.so.6"'         "$out"
     check "--json lists imports array"     0 "$code" '"imports":['         "$out"
+    check "--json lists dynamic entries"   0 "$code" '"entries":[{'        "$out"
+    printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); e=d["dynamic"]["entries"]; assert e and e[-1]["type"]=="NULL"; assert any(x["type"]=="NEEDED" and x.get("name")=="libc.so.6" for x in e)'
+    pcode=$?
+    check "JSON dynamic entries decode tags and names" 0 "$pcode" "" ""
     printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); s=[x for t in d["symbol_tables"] if t["name"]==".dynsym" for x in t["symbols"]]; assert any(x["version"] and x["version"]["kind"]=="required" and x["version"]["library"] and x["version"]["name"].startswith("GLIBC_") for x in s)'
     pcode=$?
     check "JSON exposes required GNU symbol versions" 0 "$pcode" "" ""

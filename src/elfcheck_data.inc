@@ -177,6 +177,69 @@ section .rodata
     dyn_imports_hdr:db "  Imported symbols:", 10, 0
     dyn_none:       db "    (none)", 10, 0
     dyn_indent:     db "    ", 0
+    dyn_entries_hdr: db "  Dynamic section entries:", 10, 0
+
+    ; ---- dynamic-section tag (DT_*) names ----
+    dt_null:            db "NULL", 0
+    dt_needed:          db "NEEDED", 0
+    dt_pltrelsz:        db "PLTRELSZ", 0
+    dt_pltgot:          db "PLTGOT", 0
+    dt_hash:            db "HASH", 0
+    dt_strtab:          db "STRTAB", 0
+    dt_symtab:          db "SYMTAB", 0
+    dt_rela:            db "RELA", 0
+    dt_relasz:          db "RELASZ", 0
+    dt_relaent:         db "RELAENT", 0
+    dt_strsz:           db "STRSZ", 0
+    dt_syment:          db "SYMENT", 0
+    dt_init:            db "INIT", 0
+    dt_fini:            db "FINI", 0
+    dt_soname:          db "SONAME", 0
+    dt_rpath:           db "RPATH", 0
+    dt_symbolic:        db "SYMBOLIC", 0
+    dt_rel:             db "REL", 0
+    dt_relsz:           db "RELSZ", 0
+    dt_relent:          db "RELENT", 0
+    dt_pltrel:          db "PLTREL", 0
+    dt_debug:           db "DEBUG", 0
+    dt_textrel:         db "TEXTREL", 0
+    dt_jmprel:          db "JMPREL", 0
+    dt_bindnow:         db "BIND_NOW", 0
+    dt_init_array:      db "INIT_ARRAY", 0
+    dt_fini_array:      db "FINI_ARRAY", 0
+    dt_init_arraysz:    db "INIT_ARRAYSZ", 0
+    dt_fini_arraysz:    db "FINI_ARRAYSZ", 0
+    dt_runpath:         db "RUNPATH", 0
+    dt_flags:           db "FLAGS", 0
+    dt_encoding:        db "ENCODING", 0
+    dt_preinit_array:   db "PREINIT_ARRAY", 0
+    dt_preinit_arraysz: db "PREINIT_ARRAYSZ", 0
+    dt_symtab_shndx:    db "SYMTAB_SHNDX", 0
+    dt_relrsz:          db "RELRSZ", 0
+    dt_relr:            db "RELR", 0
+    dt_relrent:         db "RELRENT", 0
+    dt_gnu_hash:        db "GNU_HASH", 0
+    dt_tlsdesc_plt:     db "TLSDESC_PLT", 0
+    dt_tlsdesc_got:     db "TLSDESC_GOT", 0
+    dt_versym:          db "VERSYM", 0
+    dt_relacount:       db "RELACOUNT", 0
+    dt_relcount:        db "RELCOUNT", 0
+    dt_flags_1:         db "FLAGS_1", 0
+    dt_verdef:          db "VERDEF", 0
+    dt_verdefnum:       db "VERDEFNUM", 0
+    dt_verneed:         db "VERNEED", 0
+    dt_verneednum:      db "VERNEEDNUM", 0
+    dt_unknown:         db "UNKNOWN", 0
+    ; table indexed by d_tag for the low range (0..37)
+    dt_names:
+        dq dt_null, dt_needed, dt_pltrelsz, dt_pltgot, dt_hash, dt_strtab
+        dq dt_symtab, dt_rela, dt_relasz, dt_relaent, dt_strsz, dt_syment
+        dq dt_init, dt_fini, dt_soname, dt_rpath, dt_symbolic, dt_rel
+        dq dt_relsz, dt_relent, dt_pltrel, dt_debug, dt_textrel, dt_jmprel
+        dq dt_bindnow, dt_init_array, dt_fini_array, dt_init_arraysz
+        dq dt_fini_arraysz, dt_runpath, dt_flags, dt_encoding, dt_preinit_array
+        dq dt_preinit_arraysz, dt_symtab_shndx, dt_relrsz, dt_relr, dt_relrent
+    DT_LOW_MAX equ 37
 
     ; ---- symbol table report ----
     sym_title:      db 10, "Symbol Tables:", 10, 0
@@ -400,6 +463,8 @@ section .rodata
     jv_st_exec:     db "exec", 0
     jk_dynamic:     db 34, "dynamic", 34, ":", 0
     jk_static:      db 34, "static", 34, ":", 0
+    jk_entries:     db 34, "entries", 34, ":", 0
+    jk_tag:         db 34, "tag", 34, ":", 0
     jk_needed:      db 34, "needed", 34, ":", 0
     jk_imports:     db 34, "imports", 34, ":", 0
     jk_symbol_tables: db 34, "symbol_tables", 34, ":", 0
