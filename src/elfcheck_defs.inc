@@ -142,6 +142,11 @@
 ; max bytes of the dynamic string table we buffer
 %define DYNSTR_CAP  262144
 
+; section-dump (-x / -p) streaming buffer and output-line assembly
+%define DUMP_CHUNK    4096
+%define LINEBUF_CAP   512
+%define LINEBUF_FLUSH 480
+
 ; GNU symbol-version sections use 15-bit version indexes.
 %define VER_MAP_COUNT 32768
 %define VERSTR_CAP    65536

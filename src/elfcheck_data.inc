@@ -5,6 +5,7 @@ section .rodata
                     db "  Output modes:   --json   --disasm | -d   --function <name>", 10
                     db "                   --triage | -t  (flag anomalies, exit 2 on HIGH/MED)", 10
                     db "  Disasm range:   --start-address <hex> --count <n>", 10
+                    db "  Section dumps:   --hex-dump | -x <name>   --string-dump | -p <name>", 10
                     db "  Section filters: --header --segments --sections --validate --security", 10
                     db "                   --dynamic --hardening --notes (shown by default)", 10
                     db "                   --symbols --relocs (opt-in tables)", 10
@@ -876,6 +877,18 @@ section .rodata
     opt_triage:     db "--triage", 0
     opt_triage_s:   db "-t", 0
 
+    opt_hexdump:    db "--hex-dump", 0
+    opt_hexdump_s:  db "-x", 0
+    opt_strdump:    db "--string-dump", 0
+    opt_strdump_s:  db "-p", 0
+
+    ; ---- section dumps (-x / -p) ----
+    hexdump_hdr:    db "Hex dump of section '", 0
+    strdump_hdr:    db "String dump of section '", 0
+    dump_hdr_tail:  db "':", 10, 0
+    dump_nf1:       db "elfcheck: section '", 0
+    dump_nf2:       db "' not found", 10, 0
+
     ; ---- triage mode (severity-ranked anomaly scan) ----
     tri_title:      db "Triage:", 10, 0
     tri_lbl_high:   db "  [HIGH]   ", 0
@@ -986,6 +999,12 @@ section .bss
     filter_mask:    resd 1             ; selected section bits (0 = use default sections)
     eff_mask:       resd 1             ; effective mask used while printing
     triage_mode:    resb 1             ; 1 = run the triage anomaly scan
+    dump_mode:      resb 1             ; 1 = run a -x / -p section dump
+    dump_error:     resb 1             ; 1 = a requested dump section was missing
+    hexdump_name:   resq 1             ; -x section name, or 0
+    strdump_name:   resq 1             ; -p section name, or 0
+    dump_buf:       resb DUMP_CHUNK    ; section-dump read chunk
+    linebuf:        resb LINEBUF_CAP   ; assembled output line
     hd_textrel:     resb 1             ; 1 = DT_TEXTREL / DF_TEXTREL set (text relocs)
     tri_high:       resq 1             ; triage findings by severity
     tri_med:        resq 1

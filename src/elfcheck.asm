@@ -25,4 +25,5 @@
 %include "elfcheck_helpers.inc"
 %include "elfcheck_json.inc"
 %include "elfcheck_disasm.inc"
+%include "elfcheck_dump.inc"
 %include "elfcheck_format.inc"

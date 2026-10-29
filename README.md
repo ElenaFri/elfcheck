@@ -25,6 +25,7 @@ A lightweight ELF64 inspector for Linux x86-64, written in NASM. It accepts ELF6
 - [x] Check segment permissions and executable stack settings
 - [x] Identify imported functions and dynamic dependencies
 - [x] Dump the full `.dynamic` tag table (readelf -d equivalent)
+- [x] Dump raw section contents as hex or printable strings (readelf -x / -p equivalent)
 - [x] Display static and dynamic symbol tables, including GNU symbol versions
 - [x] Display REL/RELA relocation entries and resolve symbol names
 - [x] Report RELRO, NX, PIE and GNU x86 CET (IBT/SHSTK) hardening properties
@@ -123,6 +124,8 @@ and relocation tables are opt-in because they can be large:
 ./elfcheck --notes <file>                # GNU build-id, ABI tag and properties
 ./elfcheck --symbols <file>              # static and dynamic symbol tables
 ./elfcheck --relocs <file>               # REL/RELA relocations and symbols
+./elfcheck -x .rodata <file>             # hex dump of a named section (readelf -x)
+./elfcheck -p .comment <file>            # printable strings of a section (readelf -p)
 ```
 
 Available filters: `--header`, `--segments`, `--sections`, `--validate`,
@@ -132,6 +135,9 @@ them under `symbol_tables` and `relocation_tables`. Structural validation always
 runs so the exit code stays meaningful, even when its section is hidden. Filters
 apply to the default text report; `--json` always emits the complete object. Use
 `--help` (or `-h`) to list every option.
+
+To inspect raw section bytes, `--hex-dump` (`-x`) and `--string-dump` (`-p`) take
+a section name and reproduce `readelf -x` / `readelf -p` output byte for byte.
 
 The default report ends with a `Security:` section that flags common red flags:
 writable and executable (`W^X`) `PT_LOAD` segments and sections, stack
@@ -169,8 +175,8 @@ summary line:
 `HIGH`/`MED` cover dangerous or weird traits (structural corruption, `W^X`
 segments/sections, an executable stack, text relocations, an out-of-bounds entry
 point); `LOW`/`INFO` cover hardening policy (no RELRO/PIE/canary/CET,
-`RPATH`/`RUNPATH`, a stripped symbol/section table). The process **exits 2 when
-any HIGH or MEDIUM finding is present** and 0 otherwise, so `elfcheck -t file`
+`RPATH`/`RUNPATH`, a stripped symbol/section table). The process exits 2 when
+any HIGH or MEDIUM finding is present and 0 otherwise, so `elfcheck -t file`
 gates a build or deploy pipeline without parsing text.
 
 Exit codes: `0` valid with no structural issues (and no HIGH/MED triage

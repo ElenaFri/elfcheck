@@ -10,6 +10,10 @@ _start:
     mov byte [disasm_mode], 0
     mov byte [triage_mode], 0
     mov byte [help_mode], 0
+    mov byte [dump_mode], 0
+    mov byte [dump_error], 0
+    mov qword [hexdump_name], 0
+    mov qword [strdump_name], 0
     mov byte [disasm_error], 0
     mov qword [function_name], 0
     mov byte [disasm_start_set], 0
@@ -99,6 +103,50 @@ _start:
     mov byte [disasm_mode], 1
     jmp .arg_next
 .not_count:
+    ; -x / --hex-dump <name> : queue a hex dump of a named section
+    mov rsi, [r9 + rcx*8]
+    lea rdi, [opt_hexdump_s]
+    call streq
+    test al, al
+    jnz .take_hexdump
+    mov rsi, [r9 + rcx*8]
+    lea rdi, [opt_hexdump]
+    call streq
+    test al, al
+    jz .not_hexdump
+.take_hexdump:
+    inc rcx
+    cmp rcx, r8
+    jae .usage
+    mov rax, [r9 + rcx*8]
+    test rax, rax
+    jz .usage
+    mov [hexdump_name], rax
+    mov byte [dump_mode], 1
+    jmp .arg_next
+.not_hexdump:
+    ; -p / --string-dump <name> : queue a string dump of a named section
+    mov rsi, [r9 + rcx*8]
+    lea rdi, [opt_strdump_s]
+    call streq
+    test al, al
+    jnz .take_strdump
+    mov rsi, [r9 + rcx*8]
+    lea rdi, [opt_strdump]
+    call streq
+    test al, al
+    jz .not_strdump
+.take_strdump:
+    inc rcx
+    cmp rcx, r8
+    jae .usage
+    mov rax, [r9 + rcx*8]
+    test rax, rax
+    jz .usage
+    mov [strdump_name], rax
+    mov byte [dump_mode], 1
+    jmp .arg_next
+.not_strdump:
     FILTARG opt_header,    FILT_HEADER
     FILTARG opt_segments,  FILT_SEGMENTS
     FILTARG opt_sections,  FILT_SECTIONS
@@ -160,6 +208,8 @@ _start:
 
     cmp byte [disasm_mode], 0
     jne .emit_disasm
+    cmp byte [dump_mode], 0
+    jne .emit_dump
     cmp byte [triage_mode], 0
     jne .emit_triage
     cmp byte [json_mode], 0
@@ -226,6 +276,17 @@ _start:
     jmp .after_triage
 .emit_disasm:
     call disassemble           ; disassemble .text; leaves [issues] at 0
+    jmp .after_output
+.emit_dump:
+    call dump_sections         ; -x / -p section dumps; sets [dump_error]
+    mov rdi, r12
+    mov rax, SYS_CLOSE
+    syscall
+    xor edi, edi               ; exit 0, or 1 if a requested section was missing
+    cmp byte [dump_error], 0
+    je .exit
+    mov edi, 1
+    jmp .exit
 .after_output:
     mov rdi, r12            ; close fd
     mov rax, SYS_CLOSE

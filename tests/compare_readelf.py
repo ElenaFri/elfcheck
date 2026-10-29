@@ -463,6 +463,22 @@ def compare_dynamic_entries(path, report, expected):
     return len(actual)
 
 
+def compare_dump(path, runner, readelf, flag, section, env, label):
+    expected = run([readelf, flag, section, path], env)
+    actual = run([runner, flag, section, path], env)
+    want = [line.rstrip() for line in expected.splitlines() if line.strip()]
+    got = [line.rstrip() for line in actual.splitlines() if line.strip()]
+    for index, (a, b) in enumerate(zip(got, want)):
+        if a != b:
+            raise ValueError(
+                f"{path}: {label} line {index}: elfcheck={a!r}, readelf={b!r}"
+            )
+    if len(got) != len(want):
+        raise ValueError(
+            f"{path}: {label} line count: elfcheck={len(got)}, readelf={len(want)}"
+        )
+
+
 def compare_file(runner, readelf, path, env):
     output = run([runner, "--json", path], env)
     try:
@@ -558,6 +574,10 @@ def compare_file(runner, readelf, path, env):
     dynamic_count = compare_dynamic_entries(
         path, report, parse_dynamic_entries(dynamic_output)
     )
+
+    # .shstrtab exists in every ELF, so it exercises both section dumps.
+    compare_dump(path, runner, readelf, "-x", ".shstrtab", env, "hex dump")
+    compare_dump(path, runner, readelf, "-p", ".shstrtab", env, "string dump")
 
     symbol_count = sum(table["entry_count"] for table in expected_symbol_tables)
     relocation_count = sum(table["entry_count"] for table in expected_relocation_tables)

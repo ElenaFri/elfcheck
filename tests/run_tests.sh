@@ -1088,6 +1088,30 @@ check "default shows header"              0 "$code" "$ELF_HEADER_HEADING" "$out"
 check "default shows hardening"           0 "$code" "$HARDENING_HEADING"  "$out"
 check "default shows notes"               0 "$code" "Notes:"             "$out"
 
+# section dumps: -x / -p (readelf -x / -p parity)
+out="$("$RUN_BIN" --hex-dump .shstrtab "$BIN" 2>&1)"; code=$?
+check "--hex-dump shows a hex dump"       0 "$code" "Hex dump of section '.shstrtab'" "$out"
+out="$("$RUN_BIN" -x .text "$BIN" 2>&1)"; code=$?
+check "-x alias dumps a section"          0 "$code" "Hex dump of section '.text'"     "$out"
+out="$("$RUN_BIN" --string-dump .shstrtab "$BIN" 2>&1)"; code=$?
+check "--string-dump shows a string dump" 0 "$code" "String dump of section '.shstrtab'" "$out"
+check "-p lists a section name string"    0 "$code" ".shstrtab" "$out"
+out="$("$RUN_BIN" -p .shstrtab "$BIN" 2>&1)"; code=$?
+check "-p alias shows a string dump"      0 "$code" "String dump of section '.shstrtab'" "$out"
+out="$("$RUN_BIN" -x .nope "$BIN" 2>&1)"; code=$?
+check "missing dump section exits 1"      1 "$code" "not found" "$out"
+out="$("$RUN_BIN" "$BIN" 2>&1)"; code=$?
+check_absent "default hides hex dumps"    0 "$code" "Hex dump of section" "$out"
+out="$("$RUN_BIN" --help 2>&1)"; code=$?
+check "--help documents --hex-dump"       0 "$code" "--hex-dump | -x <name>" "$out"
+check "--help documents --string-dump"    0 "$code" "--string-dump | -p <name>" "$out"
+if [[ -r /bin/ls ]]; then
+    out="$("$RUN_BIN" -x .interp /bin/ls 2>&1)"; code=$?
+    check "-x decodes .interp bytes"      0 "$code" "/lib" "$out"
+    out="$("$RUN_BIN" -p .interp /bin/ls 2>&1)"; code=$?
+    check "-p decodes the interpreter path" 0 "$code" "ld-linux" "$out"
+fi
+
 # 15. Compare parsed header and tables against GNU readelf output.
 if command -v python3 >/dev/null 2>&1 && command -v readelf >/dev/null 2>&1; then
     compare_files=("$BIN")
