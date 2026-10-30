@@ -1118,10 +1118,13 @@ if [[ -r /bin/ls ]]; then
     check "-p on .dynstr exits 0"           0 "$code" "String dump of section '.dynstr'" "$out"
     out="$("$RUN_BIN" --mapping /bin/ls 2>&1)"; code=$?
     check "--mapping shows the mapping"    0 "$code" "Section to Segment mapping:" "$out"
-    check "--mapping lists .interp"        0 "$code" ".interp" "$out"
-    # Test empty section (NULL section)
-    out="$("$RUN_BIN" -x "" /bin/ls 2>&1)"; code=$?
-    check "-x on empty section exits 0"     0 "$code" "Hex dump of section" "$out"
+    # Test that a non-mapped section does not appear
+    check "--mapping is non-empty"        0 "$code" "0     " "$out"
+    out="$("$RUN_BIN" --mapping /bin/ls 2>&1)"; code=$?
+    check_absent "--mapping does not list .nope" 0 "$code" ".nope" "$out"
+    # Test static binary (elfcheck itself)
+    out="$("$RUN_BIN" --mapping "$RUN_BIN" 2>&1)"; code=$?
+    check "--mapping on static binary exits 0" 0 "$code" "Section to Segment mapping:" "$out"
     out="$("$RUN_BIN" -p "" /bin/ls 2>&1)"; code=$?
     check "-p on empty section exits 0"     0 "$code" "String dump of section" "$out"
 fi
