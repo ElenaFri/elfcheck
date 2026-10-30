@@ -157,6 +157,7 @@ _start:
     FILTARG opt_symbols,   FILT_SYMBOLS
     FILTARG opt_relocs,    FILT_RELOCS
     FILTARG opt_notes,     FILT_NOTES
+    FILTARG opt_mapping,   FILT_MAPPING
     mov rsi, [r9 + rcx*8]
     test r10, r10            ; otherwise it's the path (only one allowed)
     jnz .usage
@@ -261,8 +262,12 @@ _start:
     call analyze_dynamic       ; needed libraries + imported symbols
 .f_hard:
     test dword [eff_mask], FILT_HARDENING
-    jz .f_notes
+    jz .f_map
     call check_hardening       ; exploit-mitigation posture (checksec-style)
+.f_map:
+    test dword [eff_mask], FILT_MAPPING
+    jz .f_notes
+    call print_section_to_segment_mapping
 .f_notes:
     test dword [eff_mask], FILT_NOTES
     jz .after_output

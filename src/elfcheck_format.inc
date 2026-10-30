@@ -246,8 +246,7 @@ print_cstr_pad:            ; in: rsi = pointer, ecx = width
     ret
 
 ; ---------------------------------------------------------------------------
-; print_str / print_stderr - write(fd, rsi, rdx)
-; ---------------------------------------------------------------------------
+; print_hex_err - format and print rax to stderr
 print_str:                 ; in: rsi = buf, rdx = len  -> stdout
     mov rax, SYS_WRITE
     mov rdi, STDOUT
@@ -258,4 +257,42 @@ print_stderr:              ; in: rsi = buf, rdx = len  -> stderr
     mov rax, SYS_WRITE
     mov rdi, STDERR
     syscall
+    ret
+
+; ---------------------------------------------------------------------------
+; print_hex_err - format and print rax to stderr
+; ---------------------------------------------------------------------------
+print_hex_err:                 ; in: rax = value
+    call fmt_hex
+    call print_cstr_err
+    ret
+
+; ---------------------------------------------------------------------------
+; pfield_dec2 - format rax as 2-digit decimal (leading zero), then print left-
+;               justified in a field of width ecx (space-padded)
+; ---------------------------------------------------------------------------
+pfield_dec2:                ; in: rax = value, ecx = width
+    push rcx
+    push rax
+    push rbx
+    push rdx
+    mov byte [numbuf + 31], 0   ; NUL
+    lea rbx, [numbuf + 30]      ; build digits backward
+    mov rax, rax                ; value
+    mov rcx, 10
+    xor rdx, rdx
+    div rcx
+    add dl, '0'
+    mov [rbx], dl
+    dec rbx
+    xor rdx, rdx
+    div rcx
+    add dl, '0'
+    mov [rbx], dl
+    lea rsi, [rbx]
+    pop rdx
+    pop rbx
+    pop rax
+    pop rcx
+    call print_cstr_pad
     ret

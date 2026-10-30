@@ -96,6 +96,7 @@
 %define FILT_SYMBOLS   128
 %define FILT_RELOCS    256
 %define FILT_NOTES     512
+%define FILT_MAPPING   1024
 %define FILT_DEFAULT   0x27f
 
 ; ---- program header table column widths ----
@@ -119,7 +120,24 @@
 %define SH_INFO      44
 %define SH_ENTSIZE   56
 %define SH_ADDRALIGN 48
+
+; ---- section header types (sh_type) ----
+%define SHT_NULL     0
+%define SHT_PROGBITS 1
+%define SHT_SYMTAB   2
+%define SHT_STRTAB   3
+%define SHT_RELA     4
+%define SHT_HASH     5
+%define SHT_DYNAMIC  6
+%define SHT_NOTE     7
+%define SHT_NOBITS   8
+%define SHT_REL      9
+%define SHT_SHLIB    10
+%define SHT_DYNSYM   11
+
+; ---- section header flags (sh_flags) ----
 %define SHF_WRITE    0x1
+%define SHF_ALLOC    0x2
 %define SHF_EXECINSTR 0x4
 
 ; ---- section header table column widths ----

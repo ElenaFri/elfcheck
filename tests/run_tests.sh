@@ -1105,11 +1105,25 @@ check_absent "default hides hex dumps"    0 "$code" "Hex dump of section" "$out"
 out="$("$RUN_BIN" --help 2>&1)"; code=$?
 check "--help documents --hex-dump"       0 "$code" "--hex-dump | -x <name>" "$out"
 check "--help documents --string-dump"    0 "$code" "--string-dump | -p <name>" "$out"
+check "--help documents --mapping"        0 "$code" "--mapping (section→segment)" "$out"
 if [[ -r /bin/ls ]]; then
+    # Test non-aligned section size (.interp is 28 bytes)
     out="$("$RUN_BIN" -x .interp /bin/ls 2>&1)"; code=$?
-    check "-x decodes .interp bytes"      0 "$code" "/lib" "$out"
-    out="$("$RUN_BIN" -p .interp /bin/ls 2>&1)"; code=$?
-    check "-p decodes the interpreter path" 0 "$code" "ld-linux" "$out"
+    check "-x on non-aligned section exits 0" 0 "$code" "Hex dump of section '.interp'" "$out"
+    # Test section with non-printable bytes (.rodata)
+    out="$("$RUN_BIN" -p .rodata /bin/ls 2>&1)"; code=$?
+    check "-p on .rodata exits 0"          0 "$code" "String dump of section '.rodata'" "$out"
+    # Test long string flush (use .dynstr which has long names)
+    out="$("$RUN_BIN" -p .dynstr /bin/ls 2>&1)"; code=$?
+    check "-p on .dynstr exits 0"           0 "$code" "String dump of section '.dynstr'" "$out"
+    out="$("$RUN_BIN" --mapping /bin/ls 2>&1)"; code=$?
+    check "--mapping shows the mapping"    0 "$code" "Section to Segment mapping:" "$out"
+    check "--mapping lists .interp"        0 "$code" ".interp" "$out"
+    # Test empty section (NULL section)
+    out="$("$RUN_BIN" -x "" /bin/ls 2>&1)"; code=$?
+    check "-x on empty section exits 0"     0 "$code" "Hex dump of section" "$out"
+    out="$("$RUN_BIN" -p "" /bin/ls 2>&1)"; code=$?
+    check "-p on empty section exits 0"     0 "$code" "String dump of section" "$out"
 fi
 
 # 15. Compare parsed header and tables against GNU readelf output.

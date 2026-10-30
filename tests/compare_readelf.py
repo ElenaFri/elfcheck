@@ -479,6 +479,42 @@ def compare_dump(path, runner, readelf, flag, section, env, label):
         )
 
 
+def compare_section_to_segment_mapping(path, runner, readelf, env):
+    expected = run([readelf, "-lW", path], env)
+    actual = run([runner, "--mapping", path], env)
+    want = []
+    got = []
+    in_want = False
+    in_got = False
+    for line in expected.splitlines():
+        if line.strip() == "Section to Segment mapping:":
+            in_want = True
+            continue
+        if in_want and line.startswith("  Segment Sections..."):
+            continue
+        if in_want and line.strip():
+            want.append(line.rstrip())
+        elif in_want:
+            break
+    for line in actual.splitlines():
+        if line.strip() == "Section to Segment mapping:":
+            in_got = True
+            continue
+        if in_got and line.strip():
+            got.append(line.rstrip())
+        elif in_got:
+            break
+    for index, (a, b) in enumerate(zip(got, want)):
+        if a != b:
+            raise ValueError(
+                f"{path}: mapping line {index}: elfcheck={a!r}, readelf={b!r}"
+            )
+    if len(got) != len(want):
+        raise ValueError(
+            f"{path}: mapping line count: elfcheck={len(got)}, readelf={len(want)}"
+        )
+
+
 def compare_file(runner, readelf, path, env):
     output = run([runner, "--json", path], env)
     try:
@@ -578,6 +614,9 @@ def compare_file(runner, readelf, path, env):
     # .shstrtab exists in every ELF, so it exercises both section dumps.
     compare_dump(path, runner, readelf, "-x", ".shstrtab", env, "hex dump")
     compare_dump(path, runner, readelf, "-p", ".shstrtab", env, "string dump")
+
+    # Section to Segment mapping (readelf -l parity)
+    compare_section_to_segment_mapping(path, runner, readelf, env)
 
     symbol_count = sum(table["entry_count"] for table in expected_symbol_tables)
     relocation_count = sum(table["entry_count"] for table in expected_relocation_tables)

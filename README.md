@@ -26,6 +26,7 @@ A lightweight ELF64 inspector for Linux x86-64, written in NASM. It accepts ELF6
 - [x] Identify imported functions and dynamic dependencies
 - [x] Dump the full `.dynamic` tag table (readelf -d equivalent)
 - [x] Dump raw section contents as hex or printable strings (readelf -x / -p equivalent)
+- [x] Section to Segment mapping (readelf -l equivalent)
 - [x] Display static and dynamic symbol tables, including GNU symbol versions
 - [x] Display REL/RELA relocation entries and resolve symbol names
 - [x] Report RELRO, NX, PIE and GNU x86 CET (IBT/SHSTK) hardening properties
@@ -126,6 +127,7 @@ and relocation tables are opt-in because they can be large:
 ./elfcheck --relocs <file>               # REL/RELA relocations and symbols
 ./elfcheck -x .rodata <file>             # hex dump of a named section (readelf -x)
 ./elfcheck -p .comment <file>            # printable strings of a section (readelf -p)
+./elfcheck --mapping <file>             # section to segment mapping (readelf -l)
 ```
 
 Available filters: `--header`, `--segments`, `--sections`, `--validate`,

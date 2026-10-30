@@ -324,7 +324,119 @@ print_section_headers:
 .psh_ret:
     ret
 
-; load_shstrtab - read the section-name string table (section shstrndx) into
+; ---------------------------------------------------------------------------
+; print_section_to_segment_mapping - print the "Section to Segment mapping:"
+;   table (readelf -l parity).  Needs [shdr] and [phdr] filled, and load_shstrtab.
+;   Registers: r12=fd (preserved), r13=segment index, r14=section index,
+;             r15=section count, rbx=segment count.
+; ---------------------------------------------------------------------------
+; ---------------------------------------------------------------------------
+; print_section_to_segment_mapping - print the "Section to Segment mapping:"
+;   table (readelf -l parity).  Needs [shdr] and [phdr] filled, and load_shstrtab.
+;   Registers: r12=fd (preserved), r13=segment index, r14=section index,
+;             r15=section count, rbx=segment count.
+; ---------------------------------------------------------------------------
+print_section_to_segment_mapping:
+    movzx r15d, word [ehdr + E_SHNUM]
+    test r15, r15
+    jz .pssm_ret
+    movzx ebx, word [ehdr + E_PHNUM]
+    test ebx, ebx
+    jz .pssm_ret
+    call load_shstrtab
+    PRINT s2s_title
+    xor r13, r13               ; segment index
+.pssm_seg_loop:
+    cmp r13, rbx
+    jae .pssm_ret
+    movzx eax, word [ehdr + E_PHENTSIZE]
+    imul rax, r13
+    add rax, [ehdr + E_PHOFF]
+    mov rdi, r12
+    mov rsi, rax
+    xor edx, edx
+    mov rax, SYS_LSEEK
+    syscall
+    mov rdi, r12
+    lea rsi, [phdr]
+    mov rdx, PHDR_SIZE
+    mov rax, SYS_READ
+    syscall
+    cmp rax, PHDR_SIZE
+    jl .pssm_ret
+    PRINT s2s_sep
+    mov rax, r13
+    mov ecx, 2
+    call pfield_dec2
+    PRINT s2s_sep2
+    xor r14, r14               ; section index
+.pssm_sec_loop:
+    cmp r14, r15
+    jae .pssm_next_seg
+    movzx eax, word [ehdr + E_SHENTSIZE]
+    imul rax, r14
+    add rax, [ehdr + E_SHOFF]
+    mov rdi, r12
+    mov rsi, rax
+    xor edx, edx
+    mov rax, SYS_LSEEK
+    syscall
+    mov rdi, r12
+    lea rsi, [shdr]
+    mov rdx, SHDR_SIZE
+    mov rax, SYS_READ
+    syscall
+    cmp rax, SHDR_SIZE
+    jl .pssm_next_seg
+    mov eax, dword [shdr + SH_TYPE]
+    cmp eax, SHT_NULL
+    je .pssm_skip_sec
+    ; Check if section is in segment (addr or offset)
+    mov rax, [shdr + SH_ADDR]
+    mov rcx, [shdr + SH_FLAGS]
+    test rcx, SHF_ALLOC
+    jnz .pssm_check_addr
+    ; For non-ALLOC sections, use offset
+    mov rax, [shdr + SH_OFFSET]
+    mov rcx, [phdr + P_OFFSET]
+    mov rdx, [phdr + P_FILESZ]
+    add rcx, rdx
+    cmp rax, [phdr + P_OFFSET]
+    jb .pssm_skip_sec
+    cmp rax, rcx
+    jae .pssm_skip_sec
+    jmp .pssm_print_sec
+.pssm_check_addr:
+    mov rcx, [phdr + P_VADDR]
+    mov rdx, [phdr + P_MEMSZ]
+    add rcx, rdx
+    cmp rax, [phdr + P_VADDR]
+    jb .pssm_check_offset
+    cmp rax, rcx
+    jae .pssm_check_offset
+    jmp .pssm_print_sec
+.pssm_check_offset:
+    mov rax, [shdr + SH_OFFSET]
+    mov rcx, [phdr + P_OFFSET]
+    mov rdx, [phdr + P_FILESZ]
+    add rcx, rdx
+    cmp rax, [phdr + P_OFFSET]
+    jb .pssm_skip_sec
+    cmp rax, rcx
+    jae .pssm_skip_sec
+.pssm_print_sec:
+    call section_name_ptr
+    call print_cstr
+    PRINT one_space
+.pssm_skip_sec:
+    inc r14
+    jmp .pssm_sec_loop
+.pssm_next_seg:
+    PRINT nl
+    inc r13
+    jmp .pssm_seg_loop
+.pssm_ret:
+    ret
 ;                 [strtab]; number of bytes stored in [strtab_size] (0 on none)
 load_shstrtab:
     mov qword [strtab_size], 0

@@ -7,7 +7,7 @@ section .rodata
                     db "  Disasm range:   --start-address <hex> --count <n>", 10
                     db "  Section dumps:   --hex-dump | -x <name>   --string-dump | -p <name>", 10
                     db "  Section filters: --header --segments --sections --validate --security", 10
-                    db "                   --dynamic --hardening --notes (shown by default)", 10
+                    db "                   --dynamic --hardening --notes --mapping (section→segment)", 10
                     db "                   --symbols --relocs (opt-in tables)", 10
                     db "  --help | -h     show this help", 10
     usage_len:      equ $ - usage_msg
@@ -23,6 +23,7 @@ section .rodata
     opt_symbols:    db "--symbols", 0
     opt_relocs:     db "--relocs", 0
     opt_notes:      db "--notes", 0
+    opt_mapping:    db "--mapping", 0
     opt_help:       db "--help", 0
     opt_help_s:     db "-h", 0
 
@@ -88,6 +89,12 @@ section .rodata
     s_mach_aarch64: db "AArch64", 0
     s_mach_riscv:   db "RISC-V", 0
     s_mach_unknown: db "unknown", 0
+
+    ; ---- section-to-segment mapping ----
+    s2s_title:      db 10, "Section to Segment mapping:", 10, 0
+    s2s_sep:        db "   ", 0
+    s2s_sep2:       db "     ", 0
+    one_space:      db " ", 0
 
     ; ---- program header display ----
     ph_title:       db 10, "Program Headers:", 10, 0
