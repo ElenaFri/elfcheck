@@ -70,6 +70,11 @@ make install PREFIX=~/.local
 make uninstall
 ```
 
+Releases also ship a dependency-free static binary and a `.deb`
+(`apt install ./elfcheck_<version>_amd64.deb`), built and attached
+automatically from a version tag.
+
+## Usage
 Measure NASM source-line coverage with `kcov` (the HTML report is written to
 `coverage/index.html`):
 

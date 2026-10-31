@@ -6,6 +6,7 @@
 /coverage/
 /dist/
 /elfcheck
+*.deb
 
 # Debugging and profiling
 core

@@ -30,12 +30,21 @@ SRCS := $(wildcard $(SRC_DIR)/*.asm)
 INCS := $(wildcard $(SRC_DIR)/*.inc)
 OBJS := $(patsubst $(SRC_DIR)/%.asm,$(BUILD_DIR)/%.o,$(SRCS))
 
+# The .deb version comes from the version string in the source, so there is a
+# single source of truth: bump version_msg in src/elfcheck_data.inc.
+DEB_VERSION := $(shell sed -n 's/^    version_msg:.*"elfcheck v\([0-9][0-9.]*\)".*/\1/p' $(SRC_DIR)/elfcheck_data.inc)
+DEB_ROOT := $(BUILD_DIR)/deb
+# Debian packages install to /usr, not the optional PREFIX location.
+DEB_BINDIR := usr/bin
+DEB_MANDIR := usr/share/man/man1
+DEB      := elfcheck_$(DEB_VERSION)_amd64.deb
+
 # Keep -Wall; suppress only the expected cross-section relative dword references
 # and absolute qword pointers in dispatch tables used by the non-PIE binary.
 NASMFLAGS ?= -f elf64 -g -F dwarf -Wall -w-reloc-rel-dword -w-reloc-abs-qword
 LDFLAGS   ?= -nostdlib -no-pie
 
-.PHONY: all run test fuzz-smoke coverage install uninstall clean
+.PHONY: all run test fuzz-smoke coverage install uninstall deb clean
 
 all: $(TARGET)
 
@@ -81,5 +90,19 @@ install: $(TARGET) $(MANPAGE)
 uninstall:
 	rm -f "$(DESTDIR)$(BINDIR)/$(TARGET)" "$(DESTDIR)$(MANDIR)/man1/elfcheck.1"
 
+# Package the static binary and manpage as a Debian package.
+deb: $(TARGET) $(MANPAGE)
+	@if [[ -z "$(DEB_VERSION)" ]]; then \
+		echo "error: cannot extract version from $(SRC_DIR)/elfcheck_data.inc" >&2; \
+		exit 1; \
+	fi
+	$(RM) -r "$(DEB_ROOT)"
+	install -d "$(DEB_ROOT)/DEBIAN" "$(DEB_ROOT)/$(DEB_BINDIR)" "$(DEB_ROOT)/$(DEB_MANDIR)"
+	install -m 0755 "$(TARGET)" "$(DEB_ROOT)/$(DEB_BINDIR)/$(TARGET)"
+	install -m 0644 "$(MANPAGE)" "$(DEB_ROOT)/$(DEB_MANDIR)/"
+	printf 'Package: elfcheck\nVersion: %s\nSection: utils\nPriority: optional\nArchitecture: amd64\nMaintainer: Elena FRISON <ElenaFri@users.noreply.github.com>\nDescription: validate and inspect ELF64 binaries\n Freestanding ELF64 inspector written in NASM (no libc, direct syscalls):\n parses headers, symbols, relocations and dynamic tags; disassembles\n code; reports notes, hardening and triage verdicts; optional JSON output.\n' \
+		"$(DEB_VERSION)" > "$(DEB_ROOT)/DEBIAN/control"
+	dpkg-deb --build --root-owner-group "$(DEB_ROOT)" "$(DEB)"
+
 clean:
-	rm -rf $(BUILD_DIR) $(TARGET) "$(COVERAGE_DIR)"
+	rm -rf $(BUILD_DIR) $(TARGET) "$(COVERAGE_DIR)" "$(DEB)"
