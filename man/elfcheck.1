@@ -1,0 +1,115 @@
+.TH ELFCHECK 1 "2025-10-31" "elfcheck v1.0.0" "User Commands"
+.SH NAME
+elfcheck \- validate and inspect ELF64 binaries
+.SH SYNOPSIS
+.B elfcheck
+[\fIoptions\fR] \fIfile\fR
+.SH DESCRIPTION
+.B elfcheck
+reads an ELF64 little-endian file, validates its structure, and prints a
+report covering the ELF header, program and section headers, dynamic
+dependencies, GNU notes, and hardening posture (checksec-style). It can
+also disassemble executable sections, dump section contents, and emit the
+whole analysis as JSON.
+.PP
+It is a freestanding static binary: no libc, direct Linux x86-64 syscalls
+only. Only ELF64 little-endian inputs are accepted; ELF32 and big-endian
+files are rejected explicitly.
+.SH OPTIONS
+.SS Output modes
+.TP
+.B \-\-json
+Emit the analysis as a single-line JSON object instead of the text report.
+.TP
+.B \-\-disasm\fR, \fB\-d
+Disassemble the executable .text section (Intel syntax, with addresses and
+raw opcodes). Direct branch targets are annotated with the matching function
+symbol; in relocatable .o files, PC-relative relocations are resolved.
+.TP
+.B \-\-function \fIname\fR
+Disassemble only the named function (requires a sized symbol from
+\&.symtab or .dynsym).
+.TP
+.B \-\-start\-address \fIhex\fR
+Start disassembly at a hexadecimal address inside the executable section.
+.TP
+.B \-\-count \fIn\fR
+Limit disassembly to n instructions.
+.TP
+.B \-\-triage\fR, \fB\-t
+Single pass flagging anomalies by severity (HIGH/MED/LOW/INFO) with a
+summary line. Exits 2 when any HIGH or MEDIUM finding is present.
+.TP
+.B \-\-help\fR, \fB\-h
+Print usage and exit 0.
+.TP
+.B \-\-version\fR, \fB\-v
+Print version and exit 0.
+.SS Section filters
+By default the report prints its standard sections; pass filters to show
+only what you need. Symbol and relocation tables are opt-in because they
+can be large.
+.TP
+.B \-\-header\fR, \fB\-\-segments\fR, \fB\-\-sections
+ELF header, program headers, section headers.
+.TP
+.B \-\-validate
+Structural validation findings.
+.TP
+.B \-\-security
+Advisory red flags: W^X segments/sections, executable stack, entry point
+outside executable segments, stripped section headers.
+.TP
+.B \-\-dynamic
+Dynamic linking: needed libraries, imported symbols with GNU versions, and
+the full .dynamic tag table (readelf \-d equivalent).
+.TP
+.B \-\-hardening
+RELRO, stack canary, NX, PIE, CET (IBT/SHSTK), RPATH/RUNPATH, fortified
+functions.
+.TP
+.B \-\-notes
+GNU build-id, ABI tag and x86 feature properties.
+.TP
+.B \-\-mapping
+Section to segment mapping (readelf \-l equivalent).
+.TP
+.B \-\-symbols\fR, \fB\-\-relocs
+Symbol tables (with GNU symbol versions) and REL/RELA relocations.
+.SS Section dumps
+.TP
+.B \-\-hex\-dump\fR, \fB\-x \fIname\fR
+Hex dump of a named section, byte-compatible with
+.BR "readelf \-x" .
+.TP
+.B \-\-string\-dump\fR, \fB\-p \fIname\fR
+Printable strings of a named section, like
+.BR "readelf \-p" .
+.SH EXIT STATUS
+.TP
+.B 0
+Valid ELF, no structural issues and no HIGH/MED triage finding.
+.TP
+.B 1
+Usage error, unreadable file, or not an ELF file.
+.TP
+.B 2
+Structural inconsistencies found, or a HIGH/MED triage finding tripped the
+gate.
+.SH EXAMPLES
+.TP
+Inspect a binary:
+.B elfcheck /bin/ls
+.TP
+Quick security verdict usable as a CI gate:
+.BR "elfcheck \-\-triage app && ./app" ""
+.TP
+JSON for scripting:
+.BR "elfcheck \-\-json /bin/ls | jq .hardening" ""
+.TP
+Disassemble one function:
+.BR "elfcheck \-\-function main ./app" ""
+.SH SEE ALSO
+.BR readelf (1),
+.BR objdump (1),
+.BR file (1)

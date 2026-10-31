@@ -8,7 +8,14 @@
 #   make test       build and run the test suite
 #   make fuzz-smoke run a bounded deterministic mutation smoke test
 #   make coverage   run tests under kcov and generate a source coverage report
+#   make install    install the binary and manpage (PREFIX=/usr/local, DESTDIR=)
+#   make uninstall  remove them
 #   make clean      remove build and coverage artifacts
+
+PREFIX ?= /usr/local
+BINDIR  := $(PREFIX)/bin
+MANDIR  := $(PREFIX)/share/man
+MANPAGE := man/elfcheck.1
 
 NASM      ?= nasm
 LD        ?= ld
@@ -28,7 +35,7 @@ OBJS := $(patsubst $(SRC_DIR)/%.asm,$(BUILD_DIR)/%.o,$(SRCS))
 NASMFLAGS ?= -f elf64 -g -F dwarf -Wall -w-reloc-rel-dword -w-reloc-abs-qword
 LDFLAGS   ?= -nostdlib -no-pie
 
-.PHONY: all run test fuzz-smoke coverage clean
+.PHONY: all run test fuzz-smoke coverage install uninstall clean
 
 all: $(TARGET)
 
@@ -64,6 +71,15 @@ coverage:
 	ELFCHECK_RUN_BIN="$(CURDIR)/tests/kcov-wrapper.sh" \
 	./tests/run_tests.sh
 	@printf 'Coverage report: %s/index.html\n' "$(COVERAGE_DIR)"
+
+install: $(TARGET) $(MANPAGE)
+	install -d "$(DESTDIR)$(BINDIR)"
+	install -m 0755 "$(TARGET)" "$(DESTDIR)$(BINDIR)/$(TARGET)"
+	install -d "$(DESTDIR)$(MANDIR)/man1"
+	install -m 0644 "$(MANPAGE)" "$(DESTDIR)$(MANDIR)/man1/"
+
+uninstall:
+	rm -f "$(DESTDIR)$(BINDIR)/$(TARGET)" "$(DESTDIR)$(MANDIR)/man1/elfcheck.1"
 
 clean:
 	rm -rf $(BUILD_DIR) $(TARGET) "$(COVERAGE_DIR)"

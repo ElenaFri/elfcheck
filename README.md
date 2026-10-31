@@ -62,6 +62,14 @@ make test
 The suite also compares ELF headers, segments, sections, symbol tables and relocations against GNU `readelf`.
 Run the separate, bounded deterministic mutation smoke test with `make fuzz-smoke`.
 
+Install the binary and manpage (honours `PREFIX` and `DESTDIR`):
+
+```bash
+make install                # /usr/local/bin/elfcheck + man elfcheck
+make install PREFIX=~/.local
+make uninstall
+```
+
 Measure NASM source-line coverage with `kcov` (the HTML report is written to
 `coverage/index.html`):
 
