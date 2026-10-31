@@ -87,6 +87,19 @@ jobs:
           make deb
           cp elfcheck "elfcheck-${GITHUB_REF_NAME}-linux-amd64"
 
+      - name: Extract release notes from the changelog
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v ver="$version" '
+            index($0, "## [" ver "]") == 1 { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          if [[ ! -s release-notes.md ]]; then
+            echo "error: CHANGELOG.md has no section for version $version" >&2
+            exit 1
+          fi
+
       - name: Attach artifacts to the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -95,5 +108,5 @@ jobs:
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
           else
-            gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes "${assets[@]}"
+            gh release create "$GITHUB_REF_NAME" --verify-tag --notes-file release-notes.md "${assets[@]}"
           fi
