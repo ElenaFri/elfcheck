@@ -1129,8 +1129,9 @@ if [[ -r /bin/ls ]]; then
     check "--mapping is non-empty"        0 "$code" "0     " "$out"
     out="$("$RUN_BIN" --mapping /bin/ls 2>&1)"; code=$?
     check_absent "--mapping does not list .nope" 0 "$code" ".nope" "$out"
-    # Test static binary (elfcheck itself)
-    out="$("$RUN_BIN" --mapping "$RUN_BIN" 2>&1)"; code=$?
+    # Test static binary (elfcheck itself): inspect $BIN, not $RUN_BIN,
+    # which is the kcov wrapper script under "make coverage".
+    out="$("$RUN_BIN" --mapping "$BIN" 2>&1)"; code=$?
     check "--mapping on static binary exits 0" 0 "$code" "Section to Segment mapping:" "$out"
     out="$("$RUN_BIN" -p "" /bin/ls 2>&1)"; code=$?
     check "-p on empty section exits 0"     0 "$code" "String dump of section" "$out"
