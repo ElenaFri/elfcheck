@@ -1058,8 +1058,15 @@ check "--help documents --function"      0 "$code" "--function <name>" "$out"
 check "--help documents --start-address" 0 "$code" "--start-address <hex>" "$out"
 check "--help documents --count"          0 "$code" "--count <n>" "$out"
 check "--help documents --notes"          0 "$code" "--notes" "$out"
+check "--help documents --version"       0 "$code" "--version" "$out"
 out="$("$RUN_BIN" -h 2>&1)"; code=$?
 check "-h alias prints usage, exit 0"     0 "$code" "$USAGE_HEADING" "$out"
+
+# --version prints the version and exits 0
+out="$("$RUN_BIN" --version 2>&1)"; code=$?
+check "--version prints version, exit 0"  0 "$code" "elfcheck v" "$out"
+out="$("$RUN_BIN" -v 2>&1)"; code=$?
+check "-v alias prints version, exit 0"   0 "$code" "elfcheck v" "$out"
 
 # --header shows only the ELF header
 out="$("$RUN_BIN" --header "$BIN" 2>&1)"; code=$?

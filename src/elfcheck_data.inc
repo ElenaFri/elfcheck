@@ -10,7 +10,10 @@ section .rodata
                     db "                   --dynamic --hardening --notes --mapping (section→segment)", 10
                     db "                   --symbols --relocs (opt-in tables)", 10
                     db "  --help | -h     show this help", 10
+                    db "  --version | -v  show version", 10
     usage_len:      equ $ - usage_msg
+
+    version_msg:    db "elfcheck v1.0.0", 10, 0
 
     opt_json:       db "--json", 0
     opt_header:     db "--header", 0
@@ -26,6 +29,8 @@ section .rodata
     opt_mapping:    db "--mapping", 0
     opt_help:       db "--help", 0
     opt_help_s:     db "-h", 0
+    opt_version:    db "--version", 0
+    opt_version_s:  db "-v", 0
 
     open_err_msg:   db "elfcheck: error: cannot open file", 10
     open_err_len:   equ $ - open_err_msg
@@ -996,6 +1001,7 @@ section .bss
     json_mode:      resb 1             ; 1 = emit JSON instead of report
     disasm_mode:    resb 1             ; 1 = disassemble machine code
     help_mode:      resb 1             ; 1 = --help/-h given
+    version_mode:   resb 1             ; 1 = --version/-v given
     disasm_error:   resb 1             ; 1 = targeted disassembly failed
     function_name:  resq 1             ; requested function name, or 0
     disasm_start_set: resb 1           ; 1 = --start-address supplied

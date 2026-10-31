@@ -184,3 +184,11 @@ gates a build or deploy pipeline without parsing text.
 Exit codes: `0` valid with no structural issues (and no HIGH/MED triage
 finding), `1` usage/read error or not an ELF file, `2` structural
 inconsistencies were found, or a HIGH/MED triage finding tripped the gate.
+
+## Version
+
+```bash
+./elfcheck --version
+```
+
+Prints the version number and exits.

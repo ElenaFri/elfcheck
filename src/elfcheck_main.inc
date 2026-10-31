@@ -10,6 +10,7 @@ _start:
     mov byte [disasm_mode], 0
     mov byte [triage_mode], 0
     mov byte [help_mode], 0
+    mov byte [version_mode], 0
     mov byte [dump_mode], 0
     mov byte [dump_error], 0
     mov qword [hexdump_name], 0
@@ -32,6 +33,8 @@ _start:
     MODEARG opt_triage_s, triage_mode
     MODEARG opt_help,     help_mode
     MODEARG opt_help_s,   help_mode
+    MODEARG opt_version,  version_mode
+    MODEARG opt_version_s,version_mode
     mov rsi, [r9 + rcx*8]
     lea rdi, [opt_function]
     call streq
@@ -166,6 +169,13 @@ _start:
     inc rcx
     jmp .arg_loop
 .args_done:
+    cmp byte [version_mode], 0 ; --version prints version to stdout and exits 0
+    je .not_version
+    lea rsi, [version_msg]
+    call print_cstr
+    xor edi, edi
+    jmp .exit
+.not_version:
     cmp byte [help_mode], 0  ; --help prints usage to stdout and exits 0
     je .need_path
     lea rsi, [usage_msg]
