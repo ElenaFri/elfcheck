@@ -32,6 +32,7 @@ A lightweight ELF64 inspector for Linux x86-64, written in NASM. It accepts ELF6
 - [x] Report RELRO, NX, PIE and GNU x86 CET (IBT/SHSTK) hardening properties
 - [x] Decode ELF notes: GNU build-id, ABI tag and x86 feature properties
 - [x] Triage mode: flag anomalies by severity with a CI-friendly exit code
+- [x] Per-section Shannon entropy to flag packed, encrypted or compressed code
 
 ## Requirements
 
@@ -142,10 +143,12 @@ and relocation tables are opt-in because they can be large:
 ./elfcheck -x .rodata <file>             # hex dump, byte for byte like readelf -x
 ./elfcheck -p .comment <file>            # printable strings, like readelf -p
 ./elfcheck --mapping <file>              # section to segment mapping (readelf -l)
+./elfcheck --entropy <file>              # per-section Shannon entropy (packer hint)
 ```
 
 Available filters: `--header`, `--segments`, `--sections`, `--validate`,
-`--security`, `--dynamic`, `--hardening`, `--notes`, `--symbols`, `--relocs`.
+`--security`, `--dynamic`, `--hardening`, `--notes`, `--symbols`, `--relocs`,
+`--entropy`.
 They apply only to the text report; `--json` always emits the complete object,
 including the `symbol_tables` and `relocation_tables` arrays. Structural
 validation always runs so the exit code stays meaningful even when its section is
@@ -198,6 +201,12 @@ gates a build or deploy pipeline without parsing text.
 Add `--json` to get the same verdict as a machine-readable object
 (`triage.findings[]`, `triage.summary`, `triage.gate_failed`) for scripting,
 e.g. `elfcheck -t --json file | jq .triage.gate_failed`.
+
+`--entropy` reports each section's Shannon entropy in bits/byte (0–8). High
+entropy in an executable section is a classic sign of packed, encrypted or
+compressed code — something `readelf` cannot tell you. Such a section is tagged
+`[high]` in the report, carried as `entropy.sections[].packed` in `--json`, and
+raised as a MED triage finding that gates CI.
 
 ### Exit codes
 

@@ -162,6 +162,7 @@ _start:
     FILTARG opt_relocs,    FILT_RELOCS
     FILTARG opt_notes,     FILT_NOTES
     FILTARG opt_mapping,   FILT_MAPPING
+    FILTARG opt_entropy,   FILT_ENTROPY
     mov rsi, [r9 + rcx*8]
     test r10, r10            ; otherwise it's the path (only one allowed)
     jnz .usage
@@ -281,8 +282,12 @@ _start:
     call print_section_to_segment_mapping
 .f_notes:
     test dword [eff_mask], FILT_NOTES
-    jz .after_output
+    jz .f_entropy
     call print_notes           ; decode ELF notes (build-id, ABI tag, properties)
+.f_entropy:
+    test dword [eff_mask], FILT_ENTROPY
+    jz .after_output
+    call analyze_entropy       ; per-section Shannon entropy (packer/encryption hint)
     jmp .after_output
 .emit_json:
     call print_json            ; emits everything + counts [issues]

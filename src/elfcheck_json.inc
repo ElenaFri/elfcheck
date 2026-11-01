@@ -22,6 +22,8 @@ print_json:
     call json_notes
     PRINT j_comma
     call json_hardening
+    PRINT j_comma
+    call json_entropy
     PRINT j_rbrace
     PRINT nl
     ret

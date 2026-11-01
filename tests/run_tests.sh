@@ -1255,6 +1255,133 @@ if command -v python3 >/dev/null 2>&1; then
     fi
 fi
 
+# 17. Entropy / packer detection (--entropy): per-section Shannon entropy.
+out="$("$RUN_BIN" --entropy /bin/ls 2>&1)"; code=$?
+check "--entropy shows the Entropy report" 0 "$code" "Entropy:" "$out"
+check "--entropy lists a .text entropy"    0 "$code" "bits/byte  .text" "$out"
+check_absent "--entropy: a normal binary has no [high] section" 0 "$code" "[high]" "$out"
+
+out="$("$RUN_BIN" --help 2>&1)"; code=$?
+check "--help documents --entropy"         0 "$code" "--entropy" "$out"
+
+if command -v python3 >/dev/null 2>&1; then
+    # The fixed-point entropy must match a float reference within Q16 tolerance,
+    # and the JSON fields must be correctly typed.
+    "$RUN_BIN" --json /bin/ls > "$TMP/ls-entropy.json" 2>/dev/null
+    python3 - "$TMP/ls-entropy.json" /bin/ls <<'PY'
+import sys, json, math, struct
+from collections import Counter
+j = json.load(open(sys.argv[1]))
+f = open(sys.argv[2], "rb").read()
+secs = {s["name"]: s for s in j["entropy"]["sections"]}
+e_shoff = struct.unpack_from("<Q", f, 40)[0]
+es = struct.unpack_from("<H", f, 58)[0]
+n = struct.unpack_from("<H", f, 60)[0]
+shstrndx = struct.unpack_from("<H", f, 62)[0]
+strtab = struct.unpack_from("<Q", f, e_shoff + shstrndx * es + 24)[0]
+def section_name(o):
+    nm = struct.unpack_from("<I", f, o)[0]
+    end = f.index(b"\0", strtab + nm)
+    return f[strtab + nm:end].decode()
+worst = 0.0
+for i in range(n):
+    b = e_shoff + i * es
+    nn = section_name(b)
+    if nn not in secs:
+        continue
+    off = struct.unpack_from("<Q", f, b + 24)[0]
+    size = struct.unpack_from("<Q", f, b + 32)[0]
+    data = f[off:off + size]
+    if not data:
+        continue
+    c = Counter(data); tot = len(data)
+    ref = -sum(v / tot * math.log2(v / tot) for v in c.values())
+    worst = max(worst, abs(ref - secs[nn]["entropy"]))
+assert worst <= 0.05, "entropy mismatch %f" % worst
+t = secs[".text"]
+assert isinstance(t["entropy"], (int, float))
+assert isinstance(t["packed"], bool)
+assert isinstance(t["size"], int)
+PY
+    check "--json entropy matches a float reference" 0 "$?" "" ""
+
+    # Edge path: a sectionless ELF has no section data to analyse.
+    if [[ -r "$TMP/sectionless.elf" ]]; then
+        out="$("$RUN_BIN" --entropy "$TMP/sectionless.elf" 2>&1)"; code=$?
+        check "--entropy handles a sectionless ELF" 0 "$code" "no section data" "$out"
+        "$RUN_BIN" --json "$TMP/sectionless.elf" > "$TMP/sectionless.json" 2>/dev/null
+        python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); assert d["entropy"]["sections"]==[]' "$TMP/sectionless.json"
+        check "--json entropy is empty without sections" 0 "$?" "" ""
+    fi
+
+    # Edge path: a section whose data lies past EOF yields zero entropy, no crash.
+    zd="$TMP/zero-data.elf"; cp "$BIN" "$zd"
+    python3 - "$zd" <<'PY'
+import sys, struct
+p = sys.argv[1]; d = bytearray(open(p, "rb").read())
+e_shoff = struct.unpack_from("<Q", d, 40)[0]
+es = struct.unpack_from("<H", d, 58)[0]
+n = struct.unpack_from("<H", d, 60)[0]
+for i in range(n):
+    b = e_shoff + i * es
+    typ = struct.unpack_from("<I", d, b + 4)[0]
+    size = struct.unpack_from("<Q", d, b + 32)[0]
+    if typ not in (0, 8) and size:            # a file-backed, non-empty section
+        struct.pack_into("<Q", d, b + 24, len(d))   # push its data past EOF
+        break
+open(p, "wb").write(d)
+PY
+    out="$("$RUN_BIN" --entropy "$zd" 2>&1)"; code=$?
+    check "--entropy survives a past-EOF section" 2 "$code" "0.000 bits/byte" "$out"
+
+    # Edge path: sections exist but none carry file data (all SHT_NOBITS).
+    nd="$TMP/nodata.elf"; cp "$BIN" "$nd"
+    python3 - "$nd" <<'PY'
+import sys, struct
+p = sys.argv[1]; d = bytearray(open(p, "rb").read())
+e_shoff = struct.unpack_from("<Q", d, 40)[0]
+es = struct.unpack_from("<H", d, 58)[0]
+n = struct.unpack_from("<H", d, 60)[0]
+for i in range(1, n):                          # leave section 0 (NULL) as-is
+    struct.pack_into("<I", d, e_shoff + i * es + 4, 8)   # sh_type = SHT_NOBITS
+open(p, "wb").write(d)
+PY
+    out="$("$RUN_BIN" --entropy "$nd" 2>&1)"; code=$?
+    check "--entropy reports no data when every section is NOBITS" 0 "$code" "no section data" "$out"
+
+    # A high-entropy executable section is detected as packed/encrypted.
+    pk="$TMP/packed.elf"; cp "$BIN" "$pk"
+    python3 - "$pk" <<'PY'
+import sys, struct
+p = sys.argv[1]; d = bytearray(open(p, "rb").read())
+e_shoff = struct.unpack_from("<Q", d, 40)[0]
+es = struct.unpack_from("<H", d, 58)[0]
+n = struct.unpack_from("<H", d, 60)[0]
+pattern = bytes(range(256))
+for i in range(n):
+    b = e_shoff + i * es
+    typ = struct.unpack_from("<I", d, b + 4)[0]
+    fl = struct.unpack_from("<Q", d, b + 8)[0]
+    off = struct.unpack_from("<Q", d, b + 24)[0]
+    size = struct.unpack_from("<Q", d, b + 32)[0]
+    if typ == 1 and (fl & 4) and size >= 4096:   # exec PROGBITS, large enough
+        d[off:off + size] = (pattern * (size // 256 + 1))[:size]  # ~8.0 bits/byte
+        break
+open(p, "wb").write(d)
+PY
+    out="$("$RUN_BIN" --entropy "$pk" 2>&1)"; code=$?
+    check "--entropy flags a high-entropy exec section" 0 "$code" "[high]" "$out"
+    out="$("$RUN_BIN" --triage "$pk" 2>&1)"; code=$?
+    check "triage flags a packed section MED"   2 "$code" "possibly packed" "$out"
+    check "triage gate trips on packed section" 2 "$code" "[MED]" "$out"
+    out="$("$RUN_BIN" --json "$pk" 2>&1)"; code=$?
+    printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert any(s["packed"] for s in d["entropy"]["sections"])'
+    check "--json marks the packed section" 0 "$?" "" ""
+    out="$("$RUN_BIN" -t --json "$pk" 2>&1)"; code=$?
+    printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin)["triage"]; assert d["gate_failed"] is True; assert any(f["severity"]=="MED" and "packed" in f["message"] for f in d["findings"])'
+    check "triage JSON reports the packed finding" 0 "$?" "" ""
+fi
+
 echo
 echo "Results: $pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

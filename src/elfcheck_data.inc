@@ -9,6 +9,7 @@ section .rodata
                     db "  Section filters: --header --segments --sections --validate --security", 10
                     db "                   --dynamic --hardening --notes --mapping (section→segment)", 10
                     db "                   --symbols --relocs (opt-in tables)", 10
+                    db "                   --entropy (per-section Shannon entropy)", 10
                     db "  --help | -h     show this help", 10
                     db "  --version | -v  show version", 10
     usage_len:      equ $ - usage_msg
@@ -27,6 +28,7 @@ section .rodata
     opt_relocs:     db "--relocs", 0
     opt_notes:      db "--notes", 0
     opt_mapping:    db "--mapping", 0
+    opt_entropy:    db "--entropy", 0
     opt_help:       db "--help", 0
     opt_help_s:     db "-h", 0
     opt_version:    db "--version", 0
@@ -989,6 +991,53 @@ section .rodata
         dq imp_accept,  CAP_NET
         dq 0, 0
 
+    ; ---- entropy / packer detection (--entropy; see elfcheck_entropy.inc) ----
+    ent_title:      db "Entropy:", 10, 0
+    ent_none:      db "  (no section data)", 10, 0
+    ent_indent:    db "  ", 0
+    ent_bits:      db " bits/byte  ", 0
+    ent_high:      db "  [high]", 0
+    dot_str:       db ".", 0
+    tri_m_packed:  db "high-entropy executable section (possibly packed/encrypted)", 0
+    jk_entropy:    db 34, "entropy", 34, ":", 0
+    jk_sections:   db 34, "sections", 34, ":", 0
+    jk_packed:     db 34, "packed", 34, ":", 0
+    ; log2_frac[i] = round(log2(1 + i/256) * 65536), i=0..255  (Q16 mantissa)
+    align 4
+    log2_frac:
+        dd 0, 369, 736, 1102, 1466, 1829, 2190, 2551
+        dd 2909, 3267, 3623, 3978, 4331, 4683, 5034, 5384
+        dd 5732, 6079, 6425, 6769, 7112, 7454, 7795, 8134
+        dd 8473, 8810, 9146, 9480, 9814, 10146, 10477, 10807
+        dd 11136, 11464, 11791, 12116, 12440, 12764, 13086, 13407
+        dd 13727, 14046, 14363, 14680, 14996, 15310, 15624, 15937
+        dd 16248, 16559, 16868, 17177, 17484, 17791, 18096, 18401
+        dd 18704, 19007, 19308, 19609, 19909, 20207, 20505, 20802
+        dd 21098, 21393, 21687, 21980, 22272, 22564, 22854, 23144
+        dd 23433, 23720, 24007, 24293, 24579, 24863, 25146, 25429
+        dd 25711, 25992, 26272, 26551, 26830, 27108, 27384, 27660
+        dd 27936, 28210, 28484, 28757, 29029, 29300, 29571, 29840
+        dd 30109, 30378, 30645, 30912, 31178, 31443, 31707, 31971
+        dd 32234, 32496, 32758, 33019, 33279, 33538, 33797, 34055
+        dd 34312, 34569, 34825, 35080, 35334, 35588, 35841, 36094
+        dd 36346, 36597, 36847, 37097, 37346, 37595, 37842, 38090
+        dd 38336, 38582, 38827, 39072, 39316, 39559, 39802, 40044
+        dd 40286, 40527, 40767, 41006, 41246, 41484, 41722, 41959
+        dd 42196, 42432, 42667, 42902, 43137, 43370, 43603, 43836
+        dd 44068, 44300, 44530, 44761, 44990, 45220, 45448, 45676
+        dd 45904, 46131, 46357, 46583, 46809, 47034, 47258, 47482
+        dd 47705, 47928, 48150, 48372, 48593, 48813, 49034, 49253
+        dd 49472, 49691, 49909, 50127, 50344, 50560, 50776, 50992
+        dd 51207, 51422, 51636, 51850, 52063, 52276, 52488, 52700
+        dd 52911, 53122, 53332, 53542, 53751, 53960, 54169, 54377
+        dd 54584, 54791, 54998, 55204, 55410, 55615, 55820, 56025
+        dd 56229, 56432, 56635, 56838, 57040, 57242, 57443, 57644
+        dd 57845, 58045, 58245, 58444, 58643, 58841, 59039, 59237
+        dd 59434, 59631, 59827, 60023, 60219, 60414, 60609, 60803
+        dd 60997, 61190, 61384, 61576, 61769, 61961, 62152, 62343
+        dd 62534, 62725, 62915, 63104, 63294, 63483, 63671, 63859
+        dd 64047, 64234, 64421, 64608, 64794, 64980, 65166, 65351
+
 section .bss
     ehdr:           resb EHDR_SIZE     ; full ELF header
     phdr:           resb 64            ; one program header entry (56 used)
@@ -1087,6 +1136,9 @@ section .bss
     tri_json:       resb 1             ; 1 = emit triage as JSON (--triage --json)
     tri_first:      resb 1             ; 1 = no JSON finding emitted yet (comma ctl)
     tri_cap_seen:   resb 1             ; CAP_* bits for watched dangerous imports
+    tri_packed:     resb 1             ; 1 = a high-entropy executable section found
+    entropy_hist:   resq 256           ; byte-frequency histogram (section_entropy)
+    frac_buf:       resb 4             ; "DDD\0" fractional digits for entropy
     silent:         resb 1             ; 1 = validate_structure suppresses output
     jbuf:           resb 8             ; scratch for JSON byte escaping
 

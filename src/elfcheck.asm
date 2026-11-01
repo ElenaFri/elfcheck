@@ -26,4 +26,5 @@
 %include "elfcheck_json.inc"
 %include "elfcheck_disasm.inc"
 %include "elfcheck_dump.inc"
+%include "elfcheck_entropy.inc"
 %include "elfcheck_format.inc"

@@ -181,6 +181,7 @@ run_triage:
     mov qword [tri_info], 0
     mov byte [tri_fail], 0
     call scan_dangerous_imports   ; -> [tri_cap_seen]
+    call scan_packed_sections     ; -> [tri_packed]
 
     ; ------------------------------------------------------------------ HIGH
     cmp qword [issues], 0
@@ -213,8 +214,12 @@ run_triage:
     FINDING SEV_MED, tri_m_entry
 .t_imp_gets:
     test byte [tri_cap_seen], CAP_GETS
-    jz .t_noshdr
+    jz .t_packed
     FINDING SEV_MED, tri_mi_gets
+.t_packed:
+    cmp byte [tri_packed], 0
+    je .t_noshdr
+    FINDING SEV_MED, tri_m_packed
 
     ; -------------------------------------------------------------------- LOW
 .t_noshdr:

@@ -76,6 +76,11 @@ Section to segment mapping (readelf \-l equivalent).
 .TP
 .B \-\-symbols\fR, \fB\-\-relocs
 Symbol tables (with GNU symbol versions) and REL/RELA relocations.
+.TP
+.B \-\-entropy
+Per-section Shannon entropy (bits/byte, 0\(en8). A high-entropy executable
+section is tagged [high] and is a classic sign of packed, encrypted or
+compressed code; it is also raised as a MED triage finding.
 .SS Section dumps
 .TP
 .B \-\-hex\-dump\fR, \fB\-x \fIname\fR

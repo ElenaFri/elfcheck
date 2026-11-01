@@ -102,7 +102,13 @@
 %define FILT_RELOCS    256
 %define FILT_NOTES     512
 %define FILT_MAPPING   1024
+%define FILT_ENTROPY   2048
 %define FILT_DEFAULT   0x27f
+
+; ---- entropy / packer heuristic (see elfcheck_entropy.inc) ----
+; entropy is reported in thousandths of a bit/byte (0..8000)
+%define ENTROPY_PACK_THRESH 7200   ; >= 7.2 bits/byte on executable code = suspicious
+%define ENTROPY_MIN_SIZE    4096   ; ignore tiny sections (noisy entropy)
 
 ; ---- program header table column widths ----
 %define W_IDX       5

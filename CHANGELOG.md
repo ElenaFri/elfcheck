@@ -5,6 +5,10 @@ release notes: the section matching the tag is published verbatim.
 
 ## [Unreleased]
 
+- `--entropy`: per-section Shannon entropy (bits/byte) to flag packed,
+  encrypted or compressed code; a high-entropy executable section is tagged
+  `[high]`, exposed as `entropy.sections[].packed` in `--json`, and raised as a
+  MED triage finding that gates CI
 - `--triage --json`: machine-readable verdict (`findings`, `summary`,
   `gate_failed`) with the same CI exit code as the text form
 - Triage now flags dangerous/capability imports from the dynamic symbol table:
