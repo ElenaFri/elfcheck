@@ -103,7 +103,7 @@ uninstall:
 
 # Package the static binary and manpage as a Debian package.
 deb: $(TARGET) $(MANPAGE)
-	@if [[ -z "$(DEB_VERSION)" ]]; then \
+	@if [ -z "$(DEB_VERSION)" ]; then \
 		echo "error: cannot extract version from $(SRC_DIR)/elfcheck_data.inc" >&2; \
 		exit 1; \
 	fi

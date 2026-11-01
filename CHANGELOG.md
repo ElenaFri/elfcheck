@@ -3,7 +3,7 @@
 Notable changes to elfcheck. This file is the source of the GitHub
 release notes: the section matching the tag is published verbatim.
 
-## [Unreleased]
+## [1.1.0] - 2026-11-01
 
 - `--entropy`: per-section Shannon entropy (bits/byte) to flag packed,
   encrypted or compressed code; a high-entropy executable section is tagged
