@@ -74,7 +74,6 @@ Releases also ship a dependency-free static binary and a `.deb`
 (`apt install ./elfcheck_<version>_amd64.deb`), built and attached
 automatically from a version tag.
 
-## Usage
 Measure NASM source-line coverage with `kcov` (the HTML report is written to
 `coverage/index.html`):
 
@@ -193,6 +192,10 @@ point); `LOW`/`INFO` cover hardening policy (no RELRO/PIE/canary/CET,
 `RPATH`/`RUNPATH`, a stripped symbol/section table). The process exits 2 when
 any HIGH or MEDIUM finding is present and 0 otherwise, so `elfcheck -t file`
 gates a build or deploy pipeline without parsing text.
+
+Add `--json` to get the same verdict as a machine-readable object
+(`triage.findings[]`, `triage.summary`, `triage.gate_failed`) for scripting,
+e.g. `elfcheck -t --json file | jq .triage.gate_failed`.
 
 Exit codes: `0` valid with no structural issues (and no HIGH/MED triage
 finding), `1` usage/read error or not an ELF file, `2` structural

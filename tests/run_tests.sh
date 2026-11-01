@@ -1210,6 +1210,28 @@ if [[ -r "$TMP/nopie.elf" ]]; then
     check_absent "triage: no-PIE does not gate CI" 0 "$code" "[HIGH]" "$out"
 fi
 
+# --triage --json: machine-readable verdict with the same CI gate semantics.
+if command -v python3 >/dev/null 2>&1; then
+    out="$("$RUN_BIN" -t --json "$BIN" 2>&1)"; code=$?
+    check "triage JSON exits 0 for clean self" 0 "$code" "" ""
+    printf '%s' "$out" | python3 -m json.tool >/dev/null 2>&1
+    check "triage JSON is well-formed"         0 "$?" "" ""
+    printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin)["triage"]; assert isinstance(d["findings"],list); s=d["summary"]; assert all(k in s for k in ("high","medium","low","info")); assert d["gate_failed"] is False'
+    check "triage JSON has findings, summary, gate" 0 "$?" "" ""
+
+    out="$("$RUN_BIN" -t --json "$TMP/truncated.elf" 2>&1)"; code=$?
+    check "triage JSON gate trips on structural" 2 "$code" "" ""
+    printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin)["triage"]; assert d["gate_failed"] is True and d["summary"]["high"]>=1'
+    check "triage JSON gate_failed matches exit 2" 0 "$?" "" ""
+
+    if [[ -r "$TMP/es.elf" ]]; then
+        out="$("$RUN_BIN" -t --json "$TMP/es.elf" 2>&1)"; code=$?
+        check "triage JSON flags execstack, exit 2" 2 "$code" "" ""
+        printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin)["triage"]; assert d["gate_failed"] is True and d["summary"]["high"]>=1; assert any(f["severity"]=="HIGH" and "executable stack" in f["message"] for f in d["findings"])'
+        check "triage JSON reports the HIGH finding" 0 "$?" "" ""
+    fi
+fi
+
 echo
 echo "Results: $pass passed, $fail failed"
 [[ "$fail" -eq 0 ]]

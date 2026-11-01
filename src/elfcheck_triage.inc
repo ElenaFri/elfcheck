@@ -11,42 +11,84 @@
 ; are hardening-policy or informational and never change the exit code.
 ; ===========================================================================
 
-; tri_finding - record and print one finding.
+; tri_finding - record and print one finding, in text or JSON form.
 ;   in: rsi = message cstr, al = severity (SEV_HIGH..SEV_INFO)
-;   bumps the matching counter, then prints "  [SEV]    message\n".
+;   bumps the matching counter, then emits either "  [SEV]    message\n"
+;   (text) or {"severity":"SEV","message":"..."} (when [tri_json] is set).
 tri_finding:
-    push rsi
+    push rsi                    ; [rsp] = message
     cmp al, SEV_HIGH
     jne .tf_med
     inc qword [tri_high]
-    lea rsi, [tri_lbl_high]
+    lea rdx, [tri_lbl_high]
+    lea rcx, [tri_sev_high]
     jmp .tf_emit
 .tf_med:
     cmp al, SEV_MED
     jne .tf_low
     inc qword [tri_med]
-    lea rsi, [tri_lbl_med]
+    lea rdx, [tri_lbl_med]
+    lea rcx, [tri_sev_med]
     jmp .tf_emit
 .tf_low:
     cmp al, SEV_LOW
     jne .tf_info
     inc qword [tri_low]
-    lea rsi, [tri_lbl_low]
+    lea rdx, [tri_lbl_low]
+    lea rcx, [tri_sev_low]
     jmp .tf_emit
 .tf_info:
     inc qword [tri_info]
-    lea rsi, [tri_lbl_info]
+    lea rdx, [tri_lbl_info]
+    lea rcx, [tri_sev_info]
 .tf_emit:
+    cmp byte [tri_json], 0
+    jne .tf_json
+    ; --- text: "  [SEV]    message\n" ---
+    mov rsi, rdx
     call print_cstr            ; severity label
     pop rsi
     call print_cstr            ; message
     lea rsi, [nl]
     call print_cstr
     ret
+.tf_json:
+    ; --- JSON: {"severity":"SEV","message":"..."} into the findings array ---
+    push rcx                    ; [rsp] = severity name, [rsp+8] = message
+    cmp byte [tri_first], 0
+    je .tf_j_comma
+    mov byte [tri_first], 0
+    jmp .tf_j_obj
+.tf_j_comma:
+    PRINT j_comma
+.tf_j_obj:
+    PRINT j_lbrace
+    PRINT jk_severity
+    pop rsi                     ; severity name
+    call jname
+    PRINT j_comma
+    PRINT jk_message
+    pop rsi                     ; message (our own safe ASCII strings)
+    call jname
+    PRINT j_rbrace
+    ret
 
 ; run_triage - gather facts silently, emit severity-ranked findings + summary.
+; Text form by default; a JSON object when [tri_json] is set. The CI gate
+; ([tri_fail]) is computed identically in both forms.
 run_triage:
+    cmp byte [tri_json], 0
+    jne .rt_json_open
     PRINT tri_title
+    jmp .rt_gather
+.rt_json_open:
+    PRINT j_lbrace             ; { "triage": { "findings": [
+    PRINT jk_triage
+    PRINT j_lbrace
+    PRINT jk_findings
+    PRINT j_lbrack
+    mov byte [tri_first], 1
+.rt_gather:
 
     ; --- reuse the existing analysers, output suppressed ---
     mov byte [silent], 1
@@ -148,6 +190,17 @@ run_triage:
 
     ; ---------------------------------------------------------------- summary
 .t_summary:
+    ; CI gate: any HIGH or MEDIUM finding trips the non-zero exit code
+    ; (computed for both the text and JSON forms).
+    mov rax, [tri_high]
+    add rax, [tri_med]
+    test rax, rax
+    jz .t_nogate
+    mov byte [tri_fail], 1
+.t_nogate:
+    cmp byte [tri_json], 0
+    jne .t_json_summary
+    ; --- text summary ---
     mov rax, [tri_high]
     add rax, [tri_med]
     add rax, [tri_low]
@@ -170,11 +223,38 @@ run_triage:
     mov rax, [tri_info]
     call print_dec
     PRINT tri_sum_info
-    ; CI gate: any HIGH or MEDIUM finding trips the non-zero exit code.
+    ret
+.t_json_summary:
+    PRINT j_rbrack             ; close "findings":[ ... ]
+    PRINT j_comma
+    PRINT jk_summary
+    PRINT j_lbrace
+    PRINT jk_high
     mov rax, [tri_high]
-    add rax, [tri_med]
-    test rax, rax
-    jz .t_ret
-    mov byte [tri_fail], 1
-.t_ret:
+    call print_dec
+    PRINT j_comma
+    PRINT jk_medium
+    mov rax, [tri_med]
+    call print_dec
+    PRINT j_comma
+    PRINT jk_low
+    mov rax, [tri_low]
+    call print_dec
+    PRINT j_comma
+    PRINT jk_info
+    mov rax, [tri_info]
+    call print_dec
+    PRINT j_rbrace             ; close "summary":{ ... }
+    PRINT j_comma
+    PRINT jk_gate
+    cmp byte [tri_fail], 0
+    jne .t_js_gate_true
+    PRINT j_false
+    jmp .t_js_close
+.t_js_gate_true:
+    PRINT j_true
+.t_js_close:
+    PRINT j_rbrace             ; close "triage":{ ... }
+    PRINT j_rbrace             ; close outer { ... }
+    PRINT nl
     ret

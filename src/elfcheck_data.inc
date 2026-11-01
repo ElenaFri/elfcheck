@@ -929,6 +929,22 @@ section .rodata
     tri_sum_low:    db " low, ", 0
     tri_sum_info:   db " info", 10, 0
 
+    ; ---- triage JSON output (--triage --json) ----
+    jk_triage:      db 34, "triage", 34, ":", 0
+    jk_findings:    db 34, "findings", 34, ":", 0
+    jk_severity:    db 34, "severity", 34, ":", 0
+    jk_message:     db 34, "message", 34, ":", 0
+    jk_summary:     db 34, "summary", 34, ":", 0
+    jk_high:        db 34, "high", 34, ":", 0
+    jk_medium:      db 34, "medium", 34, ":", 0
+    jk_low:         db 34, "low", 34, ":", 0
+    jk_info:        db 34, "info", 34, ":", 0
+    jk_gate:        db 34, "gate_failed", 34, ":", 0
+    tri_sev_high:   db "HIGH", 0
+    tri_sev_med:    db "MED", 0
+    tri_sev_low:    db "LOW", 0
+    tri_sev_info:   db "INFO", 0
+
 section .bss
     ehdr:           resb EHDR_SIZE     ; full ELF header
     phdr:           resb 64            ; one program header entry (56 used)
@@ -1024,6 +1040,8 @@ section .bss
     tri_low:        resq 1
     tri_info:       resq 1
     tri_fail:       resb 1             ; 1 = triage CI gate tripped (exit 2)
+    tri_json:       resb 1             ; 1 = emit triage as JSON (--triage --json)
+    tri_first:      resb 1             ; 1 = no JSON finding emitted yet (comma ctl)
     silent:         resb 1             ; 1 = validate_structure suppresses output
     jbuf:           resb 8             ; scratch for JSON byte escaping
 

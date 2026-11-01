@@ -3,6 +3,11 @@
 Notable changes to elfcheck. This file is the source of the GitHub
 release notes: the section matching the tag is published verbatim.
 
+## [Unreleased]
+
+- `--triage --json`: machine-readable verdict (`findings`, `summary`,
+  `gate_failed`) with the same CI exit code as the text form
+
 ## [1.0.1] - 2025-10-31
 
 - Version tags now build and publish release artifacts automatically: a

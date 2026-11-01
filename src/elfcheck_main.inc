@@ -9,6 +9,7 @@ _start:
     mov byte [json_mode], 0
     mov byte [disasm_mode], 0
     mov byte [triage_mode], 0
+    mov byte [tri_json], 0
     mov byte [help_mode], 0
     mov byte [version_mode], 0
     mov byte [dump_mode], 0
@@ -287,6 +288,8 @@ _start:
     call print_json            ; emits everything + counts [issues]
     jmp .after_output
 .emit_triage:
+    mov al, [json_mode]        ; --triage --json emits a machine-readable verdict
+    mov [tri_json], al
     call run_triage            ; severity-ranked anomaly scan; sets [tri_fail]
     jmp .after_triage
 .emit_disasm:
