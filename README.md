@@ -127,8 +127,10 @@ be piped through a pager or the usual filters:
 ./elfcheck -d <file> | grep call
 ```
 
-By default the report prints its standard sections. Pass one or more **section
-filters** to show only what you need (handy to keep the output short); symbol
+### Section filters
+
+By default the report prints its standard sections. Pass one or more
+filters to show only what you need (handy to keep the output short); symbol
 and relocation tables are opt-in because they can be large:
 
 ```bash
@@ -137,23 +139,20 @@ and relocation tables are opt-in because they can be large:
 ./elfcheck --notes <file>                # GNU build-id, ABI tag and properties
 ./elfcheck --symbols <file>              # static and dynamic symbol tables
 ./elfcheck --relocs <file>               # REL/RELA relocations and symbols
-./elfcheck -x .rodata <file>             # hex dump of a named section (readelf -x)
-./elfcheck -p .comment <file>            # printable strings of a section (readelf -p)
-./elfcheck --mapping <file>             # section to segment mapping (readelf -l)
+./elfcheck -x .rodata <file>             # hex dump, byte for byte like readelf -x
+./elfcheck -p .comment <file>            # printable strings, like readelf -p
+./elfcheck --mapping <file>              # section to segment mapping (readelf -l)
 ```
 
 Available filters: `--header`, `--segments`, `--sections`, `--validate`,
-`--security`, `--dynamic`, `--hardening`, `--notes`, `--symbols`, `--relocs`. Symbol and
-relocation tables are opt-in because they can be large; `--json` always includes
-them under `symbol_tables` and `relocation_tables`. Structural validation always
-runs so the exit code stays meaningful, even when its section is hidden. Filters
-apply to the default text report; `--json` always emits the complete object. Use
-`--help` (or `-h`) to list every option.
+`--security`, `--dynamic`, `--hardening`, `--notes`, `--symbols`, `--relocs`.
+They apply only to the text report; `--json` always emits the complete object,
+including the `symbol_tables` and `relocation_tables` arrays. Structural
+validation always runs so the exit code stays meaningful even when its section is
+hidden. Use `--help` (or `-h`) to list every option.
 
-To inspect raw section bytes, `--hex-dump` (`-x`) and `--string-dump` (`-p`) take
-a section name and reproduce `readelf -x` / `readelf -p` output byte for byte.
-
-The default report ends with a `Security:` section that flags common red flags:
+The default report ends with a `Security:` section that highlights common red
+flags:
 writable and executable (`W^X`) `PT_LOAD` segments and sections, stack
 executability via `PT_GNU_STACK`, an entry point that falls outside any
 executable segment, and a stripped section header table. These findings are
@@ -189,23 +188,26 @@ summary line:
 `HIGH`/`MED` cover dangerous or weird traits (structural corruption, `W^X`
 segments/sections, an executable stack, text relocations, an out-of-bounds entry
 point); `LOW`/`INFO` cover hardening policy (no RELRO/PIE/canary/CET,
-`RPATH`/`RUNPATH`, a stripped symbol/section table). Triage also reads the
-dynamic symbol table and flags dangerous or capability-revealing imports: a
-banned `gets()` (MED, gates CI), command/process execution (`system`, `popen`,
-the `exec*` family, `posix_spawn` — LOW) and networking (`socket`, `connect`,
-… — INFO). The process exits 2 when any HIGH or MEDIUM finding is present and 0
-otherwise, so `elfcheck -t file` gates a build or deploy pipeline without
-parsing text.
+`RPATH`/`RUNPATH`, a stripped symbol/section table). Triage also flags
+dangerous or capability-revealing imports from the dynamic symbol table: the
+banned `gets()` (MED, gates CI), command execution (`system`, `popen`, `exec*` —
+LOW) and networking (`socket`, `connect`, … — INFO). The process exits 2 when
+any HIGH or MEDIUM finding is present and 0 otherwise, so `elfcheck -t file`
+gates a build or deploy pipeline without parsing text.
 
 Add `--json` to get the same verdict as a machine-readable object
 (`triage.findings[]`, `triage.summary`, `triage.gate_failed`) for scripting,
 e.g. `elfcheck -t --json file | jq .triage.gate_failed`.
 
-Exit codes: `0` valid with no structural issues (and no HIGH/MED triage
-finding), `1` usage/read error or not an ELF file, `2` structural
+### Exit codes
+
+- `0`: valid with no structural issues (and no HIGH/MED triage
+finding)
+- `1`: usage/read error or not an ELF file
+- `2`: structural
 inconsistencies were found, or a HIGH/MED triage finding tripped the gate.
 
-## Version
+### Version
 
 ```bash
 ./elfcheck --version
