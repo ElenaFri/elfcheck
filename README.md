@@ -189,9 +189,13 @@ summary line:
 `HIGH`/`MED` cover dangerous or weird traits (structural corruption, `W^X`
 segments/sections, an executable stack, text relocations, an out-of-bounds entry
 point); `LOW`/`INFO` cover hardening policy (no RELRO/PIE/canary/CET,
-`RPATH`/`RUNPATH`, a stripped symbol/section table). The process exits 2 when
-any HIGH or MEDIUM finding is present and 0 otherwise, so `elfcheck -t file`
-gates a build or deploy pipeline without parsing text.
+`RPATH`/`RUNPATH`, a stripped symbol/section table). Triage also reads the
+dynamic symbol table and flags dangerous or capability-revealing imports: a
+banned `gets()` (MED, gates CI), command/process execution (`system`, `popen`,
+the `exec*` family, `posix_spawn` — LOW) and networking (`socket`, `connect`,
+… — INFO). The process exits 2 when any HIGH or MEDIUM finding is present and 0
+otherwise, so `elfcheck -t file` gates a build or deploy pipeline without
+parsing text.
 
 Add `--json` to get the same verdict as a machine-readable object
 (`triage.findings[]`, `triage.summary`, `triage.gate_failed`) for scripting,

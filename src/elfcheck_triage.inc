@@ -73,6 +73,84 @@ tri_finding:
     PRINT j_rbrace
     ret
 
+; scan_dangerous_imports - set [tri_cap_seen] bits for watched undefined
+;   (imported) .dynsym symbols. Silent; call before emitting findings.
+;   Static binaries / no .dynsym -> no bits set. fd in r12 (preserved).
+scan_dangerous_imports:
+    mov byte [tri_cap_seen], 0
+    mov eax, 11                 ; SHT_DYNSYM
+    call find_section
+    cmp rax, -1
+    je .sdi_ret
+    mov rax, [shdr + SH_OFFSET]
+    mov [dsym_off], rax
+    mov rax, [shdr + SH_SIZE]
+    mov [dsym_size], rax
+    mov rax, [shdr + SH_ENTSIZE]
+    mov [dsym_ent], rax
+    mov eax, dword [shdr + SH_LINK]
+    call load_dynstr           ; .dynstr via sh_link
+    push rbx
+    push r13
+    push r14
+    push r15
+    mov rcx, [dsym_ent]
+    test rcx, rcx
+    jz .sdi_pop                ; no entry size -> nothing to iterate
+    mov rax, [dsym_size]
+    xor rdx, rdx
+    div rcx                    ; rax = count = size / entsize
+    mov r14, rax
+    xor r13, r13               ; symbol index
+.sdi_loop:
+    cmp r13, r14
+    jae .sdi_pop
+    mov rax, r13
+    mul qword [dsym_ent]
+    add rax, [dsym_off]
+    mov rdi, r12
+    mov rsi, rax
+    xor edx, edx
+    mov rax, SYS_LSEEK
+    syscall
+    mov rdi, r12
+    lea rsi, [syment]
+    mov rdx, 24
+    mov rax, SYS_READ
+    syscall
+    cmp rax, 24
+    jl .sdi_pop
+    movzx eax, word [syment + 6]   ; st_shndx
+    test eax, eax
+    jnz .sdi_next              ; defined here -> not an import
+    mov eax, dword [syment]       ; st_name
+    test eax, eax
+    jz .sdi_next
+    call dynstr_name_ptr      ; rsi -> imported name
+    lea r15, [tri_imp_tbl]
+.sdi_tbl:
+    mov rdi, [r15]            ; watch name ptr (0 terminates table)
+    test rdi, rdi
+    jz .sdi_next
+    call streq               ; al=1 if equal; rsi/rdi preserved
+    test al, al
+    jnz .sdi_hit
+    add r15, 16
+    jmp .sdi_tbl
+.sdi_hit:
+    mov cl, [r15 + 8]        ; capability bit for this entry
+    or [tri_cap_seen], cl
+.sdi_next:
+    inc r13
+    jmp .sdi_loop
+.sdi_pop:
+    pop r15
+    pop r14
+    pop r13
+    pop rbx
+.sdi_ret:
+    ret
+
 ; run_triage - gather facts silently, emit severity-ranked findings + summary.
 ; Text form by default; a JSON object when [tri_json] is set. The CI gate
 ; ([tri_fail]) is computed identically in both forms.
@@ -102,6 +180,7 @@ run_triage:
     mov qword [tri_low], 0
     mov qword [tri_info], 0
     mov byte [tri_fail], 0
+    call scan_dangerous_imports   ; -> [tri_cap_seen]
 
     ; ------------------------------------------------------------------ HIGH
     cmp qword [issues], 0
@@ -128,10 +207,14 @@ run_triage:
 .t_entry:
     mov rax, [ehdr + E_ENTRY]
     test rax, rax
-    jz .t_noshdr               ; no entry address (e.g. a DSO): nothing to check
+    jz .t_imp_gets             ; no entry address (e.g. a DSO): nothing to check
     cmp byte [sec_entry_ok], 0
-    jne .t_noshdr
+    jne .t_imp_gets
     FINDING SEV_MED, tri_m_entry
+.t_imp_gets:
+    test byte [tri_cap_seen], CAP_GETS
+    jz .t_noshdr
+    FINDING SEV_MED, tri_mi_gets
 
     ; -------------------------------------------------------------------- LOW
 .t_noshdr:
@@ -174,19 +257,27 @@ run_triage:
     FINDING SEV_LOW, tri_m_rpath
 .t_runpath:
     cmp qword [hd_runpath_off], -1
-    je .t_stripped
+    je .t_imp_exec
     FINDING SEV_LOW, tri_m_runpath
+.t_imp_exec:
+    test byte [tri_cap_seen], CAP_EXEC
+    jz .t_stripped
+    FINDING SEV_LOW, tri_mi_exec
 
     ; ------------------------------------------------------------------- INFO
 .t_stripped:
     movzx eax, word [ehdr + E_SHNUM]
     test eax, eax
-    jz .t_summary              ; no sections at all -> already a LOW finding
+    jz .t_imp_net              ; no sections at all -> already a LOW finding
     mov eax, 2                 ; SHT_SYMTAB
     call find_section          ; overwrites [shdr] (scratch at this point)
     cmp rax, -1
-    jne .t_summary
+    jne .t_imp_net
     FINDING SEV_INFO, tri_m_stripped
+.t_imp_net:
+    test byte [tri_cap_seen], CAP_NET
+    jz .t_summary
+    FINDING SEV_INFO, tri_mi_net
 
     ; ---------------------------------------------------------------- summary
 .t_summary:

@@ -922,6 +922,9 @@ section .rodata
     tri_m_rpath:    db "RPATH set (insecure library search path)", 0
     tri_m_runpath:  db "RUNPATH set (library search path override)", 0
     tri_m_stripped: db "no symbol table (.symtab stripped)", 0
+    tri_mi_gets:    db "imports gets() (banned, unbounded stdin read)", 0
+    tri_mi_exec:    db "imports command/process execution (system/exec*)", 0
+    tri_mi_net:     db "imports network functions (socket/connect/...)", 0
     tri_clean:      db "  Clean: no anomalies detected.", 10, 0
     tri_sum_pre:    db "  Summary: ", 0
     tri_sum_high:   db " high, ", 0
@@ -944,6 +947,47 @@ section .rodata
     tri_sev_med:    db "MED", 0
     tri_sev_low:    db "LOW", 0
     tri_sev_info:   db "INFO", 0
+
+    ; ---- dangerous-import watchlist (scan_dangerous_imports) ----
+    ; names matched against undefined (imported) .dynsym symbols
+    imp_gets:       db "gets", 0
+    imp_system:     db "system", 0
+    imp_popen:      db "popen", 0
+    imp_execl:      db "execl", 0
+    imp_execlp:     db "execlp", 0
+    imp_execle:     db "execle", 0
+    imp_execv:      db "execv", 0
+    imp_execve:     db "execve", 0
+    imp_execvp:     db "execvp", 0
+    imp_execvpe:    db "execvpe", 0
+    imp_pspawn:     db "posix_spawn", 0
+    imp_pspawnp:    db "posix_spawnp", 0
+    imp_socket:     db "socket", 0
+    imp_connect:    db "connect", 0
+    imp_bind:       db "bind", 0
+    imp_listen:     db "listen", 0
+    imp_accept:     db "accept", 0
+    ; table of {name ptr, capability bit}; 0,0 terminates
+    align 8
+    tri_imp_tbl:
+        dq imp_gets,    CAP_GETS
+        dq imp_system,  CAP_EXEC
+        dq imp_popen,   CAP_EXEC
+        dq imp_execl,   CAP_EXEC
+        dq imp_execlp,  CAP_EXEC
+        dq imp_execle,  CAP_EXEC
+        dq imp_execv,   CAP_EXEC
+        dq imp_execve,  CAP_EXEC
+        dq imp_execvp,  CAP_EXEC
+        dq imp_execvpe, CAP_EXEC
+        dq imp_pspawn,  CAP_EXEC
+        dq imp_pspawnp, CAP_EXEC
+        dq imp_socket,  CAP_NET
+        dq imp_connect, CAP_NET
+        dq imp_bind,    CAP_NET
+        dq imp_listen,  CAP_NET
+        dq imp_accept,  CAP_NET
+        dq 0, 0
 
 section .bss
     ehdr:           resb EHDR_SIZE     ; full ELF header
@@ -1042,6 +1086,7 @@ section .bss
     tri_fail:       resb 1             ; 1 = triage CI gate tripped (exit 2)
     tri_json:       resb 1             ; 1 = emit triage as JSON (--triage --json)
     tri_first:      resb 1             ; 1 = no JSON finding emitted yet (comma ctl)
+    tri_cap_seen:   resb 1             ; CAP_* bits for watched dangerous imports
     silent:         resb 1             ; 1 = validate_structure suppresses output
     jbuf:           resb 8             ; scratch for JSON byte escaping
 

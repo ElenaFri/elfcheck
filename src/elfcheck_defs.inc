@@ -85,6 +85,11 @@
 %define SEV_LOW  2
 %define SEV_INFO 3
 
+; ---- dangerous/capability import classes (see scan_dangerous_imports) ----
+%define CAP_GETS 1          ; banned gets() import            -> MED
+%define CAP_EXEC 2          ; command/process execution family -> LOW
+%define CAP_NET  4          ; network sockets                 -> INFO
+
 ; ---- section-selection filter bits (0 = use the standard report) ----
 %define FILT_HEADER    1
 %define FILT_SEGMENTS  2

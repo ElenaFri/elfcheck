@@ -1210,6 +1210,23 @@ if [[ -r "$TMP/nopie.elf" ]]; then
     check_absent "triage: no-PIE does not gate CI" 0 "$code" "[HIGH]" "$out"
 fi
 
+# dangerous / capability imports surfaced from .dynsym
+if command -v gcc >/dev/null 2>&1; then
+    printf '#include <stdlib.h>\n#include <sys/socket.h>\nint main(void){system("true");socket(AF_INET,SOCK_STREAM,0);return 0;}\n' > "$TMP/caps.c"
+    if gcc -O0 -o "$TMP/caps.elf" "$TMP/caps.c" 2>/dev/null; then
+        out="$("$RUN_BIN" --triage "$TMP/caps.elf" 2>&1)"; code=$?
+        check "triage flags command execution LOW" 0 "$code" "command/process execution" "$out"
+        check "triage flags network import INFO"    0 "$code" "network functions" "$out"
+        check_absent "triage: capability imports do not gate CI" 0 "$code" "[HIGH]" "$out"
+    fi
+    # gets() is banned -> MED finding, CI gate trips (links with a warning)
+    printf 'extern char *gets(char*);\nchar b[16];\nint main(void){gets(b);return 0;}\n' > "$TMP/gets.c"
+    if gcc -O0 -fno-stack-protector -o "$TMP/gets.elf" "$TMP/gets.c" 2>/dev/null; then
+        out="$("$RUN_BIN" --triage "$TMP/gets.elf" 2>&1)"; code=$?
+        check "triage flags gets() MED and gates CI" 2 "$code" "gets()" "$out"
+    fi
+fi
+
 # --triage --json: machine-readable verdict with the same CI gate semantics.
 if command -v python3 >/dev/null 2>&1; then
     out="$("$RUN_BIN" -t --json "$BIN" 2>&1)"; code=$?
@@ -1229,6 +1246,12 @@ if command -v python3 >/dev/null 2>&1; then
         check "triage JSON flags execstack, exit 2" 2 "$code" "" ""
         printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin)["triage"]; assert d["gate_failed"] is True and d["summary"]["high"]>=1; assert any(f["severity"]=="HIGH" and "executable stack" in f["message"] for f in d["findings"])'
         check "triage JSON reports the HIGH finding" 0 "$?" "" ""
+    fi
+    if [[ -r "$TMP/gets.elf" ]]; then
+        out="$("$RUN_BIN" -t --json "$TMP/gets.elf" 2>&1)"; code=$?
+        check "triage JSON gates on banned import" 2 "$code" "" ""
+        printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin)["triage"]; assert d["gate_failed"] is True; assert any(f["severity"]=="MED" and "gets()" in f["message"] for f in d["findings"])'
+        check "triage JSON reports the banned import" 0 "$?" "" ""
     fi
 fi
 

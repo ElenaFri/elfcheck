@@ -7,6 +7,8 @@ release notes: the section matching the tag is published verbatim.
 
 - `--triage --json`: machine-readable verdict (`findings`, `summary`,
   `gate_failed`) with the same CI exit code as the text form
+- Triage now flags dangerous/capability imports from the dynamic symbol table:
+  banned `gets()` (gates CI), command/process execution and networking
 
 ## [1.0.1] - 2025-10-31
 
