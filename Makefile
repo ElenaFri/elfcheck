@@ -20,6 +20,7 @@ MANPAGE := man/elfcheck.1
 NASM      ?= nasm
 LD        ?= ld
 KCOV      ?= kcov
+FUZZ_CASES ?= 16
 COVERAGE_DIR ?= coverage
 
 TARGET    := elfcheck
@@ -64,7 +65,17 @@ test: $(TARGET)
 	./tests/run_tests.sh
 
 fuzz-smoke: $(TARGET)
-	python3 ./tests/fuzz_smoke.py ./$(TARGET)
+	@extra=""; \
+	if command -v gcc >/dev/null 2>&1; then \
+		printf 'int elfcheck_fuzz_fixture(void) { return 7; }\n' > $(BUILD_DIR)/fuzz-fixture.c; \
+		if gcc -c -o $(BUILD_DIR)/fuzz-fixture.o $(BUILD_DIR)/fuzz-fixture.c 2>/dev/null; then \
+			extra=" $(BUILD_DIR)/fuzz-fixture.o"; \
+		fi; \
+	fi; \
+	for t in /bin/sh /bin/ls; do \
+		if [ -r "$$t" ]; then extra="$$extra $$t"; fi; \
+	done; \
+	python3 ./tests/fuzz_smoke.py --cases $(FUZZ_CASES) ./$(TARGET) $$extra
 
 coverage:
 	@command -v $(KCOV) >/dev/null 2>&1 || { \

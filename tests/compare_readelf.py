@@ -137,9 +137,10 @@ def normalize_symbol_name(name, symbol_type):
     if name is None or symbol_type == "SECTION":
         return ""
     name = re.sub(r"\s+\(\d+\)$", "", name)
-    return re.sub(
-        r"@[A-Z][A-Z0-9_]*_(?:[0-9][A-Za-z0-9_.+-]*|PRIVATE)$", "", name
-    )
+    # readelf embeds symbol versions in the display name (@VER or @@VER);
+    # the elfcheck JSON keeps them in a separate field, so strip any version
+    # suffix on both sides before comparing.
+    return re.sub(r"@@?[^@]+$", "", name)
 
 
 def parse_symbol_section_index(value):

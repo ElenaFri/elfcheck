@@ -391,39 +391,21 @@ print_section_to_segment_mapping:
     mov eax, dword [shdr + SH_TYPE]
     cmp eax, SHT_NULL
     je .pssm_skip_sec
-    ; Check if section is in segment (addr or offset)
+    ; readelf lists only SHF_ALLOC sections, and only when the whole section
+    ; fits in the segment memory range [p_vaddr, p_vaddr + p_memsz): a section
+    ; that starts inside but ends past the segment is excluded (e.g. .got.plt
+    ; overlapping the tail of PT_GNU_RELRO).
+    mov rax, [shdr + SH_FLAGS]
+    test rax, SHF_ALLOC
+    jz .pssm_skip_sec
     mov rax, [shdr + SH_ADDR]
-    mov rcx, [shdr + SH_FLAGS]
-    test rcx, SHF_ALLOC
-    jnz .pssm_check_addr
-    ; For non-ALLOC sections, use offset
-    mov rax, [shdr + SH_OFFSET]
-    mov rcx, [phdr + P_OFFSET]
-    mov rdx, [phdr + P_FILESZ]
-    add rcx, rdx
-    cmp rax, [phdr + P_OFFSET]
-    jb .pssm_skip_sec
-    cmp rax, rcx
-    jae .pssm_skip_sec
-    jmp .pssm_print_sec
-.pssm_check_addr:
     mov rcx, [phdr + P_VADDR]
-    mov rdx, [phdr + P_MEMSZ]
-    add rcx, rdx
-    cmp rax, [phdr + P_VADDR]
-    jb .pssm_check_offset
     cmp rax, rcx
-    jae .pssm_check_offset
-    jmp .pssm_print_sec
-.pssm_check_offset:
-    mov rax, [shdr + SH_OFFSET]
-    mov rcx, [phdr + P_OFFSET]
-    mov rdx, [phdr + P_FILESZ]
-    add rcx, rdx
-    cmp rax, [phdr + P_OFFSET]
     jb .pssm_skip_sec
+    add rcx, [phdr + P_MEMSZ]
+    add rax, [shdr + SH_SIZE]
     cmp rax, rcx
-    jae .pssm_skip_sec
+    ja .pssm_skip_sec
 .pssm_print_sec:
     call section_name_ptr
     call print_cstr
