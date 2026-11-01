@@ -6,6 +6,7 @@
 /coverage/
 /dist/
 /elfcheck
+/vuln
 *.deb
 
 # Debugging and profiling

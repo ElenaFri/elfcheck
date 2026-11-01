@@ -1,8 +1,53 @@
 # elfcheck
 
 [![Coverage](https://codecov.io/gh/ElenaFri/elfcheck/branch/main/graph/badge.svg)](https://codecov.io/gh/ElenaFri/elfcheck)
+[![Release](https://img.shields.io/github/v/release/ElenaFri/elfcheck?sort=semver)](https://github.com/ElenaFri/elfcheck/releases/latest)
 
 A lightweight ELF64 inspector for Linux x86-64, written in NASM. It accepts ELF64 little-endian files, validates their structure, and parses headers, segments, sections, symbol and relocation tables. It also disassembles machine code and reports dynamic dependencies and hardening. Optional JSON output; no libc, direct syscalls only.
+
+## `readelf` dumps, `elfcheck` judges
+
+Where `readelf` and `objdump` show you *what* is in a binary, elfcheck also tells you *what it means*: a severity-ranked anomaly scan with a CI-friendly exit code (`--triage`), a checksec-style exploit-mitigation report (`--hardening`), detection of dangerous imports and writable-executable memory, and per-section Shannon entropy to flag packed or encrypted code (`--entropy`) — interpretation `readelf` simply doesn't do. You still get the usual header, section, symbol and relocation parsing and a disassembler underneath, and every report is available as JSON for scripting.
+
+### Examples
+
+A severity-ranked verdict with a CI-friendly exit code. A clean binary trips
+nothing and exits 0:
+
+```console
+$ elfcheck --triage ./elfcheck
+Triage:
+  [LOW]    no RELRO (GOT is writable)
+  [LOW]    no PIE (fixed load address)
+  [LOW]    no stack canary
+  [LOW]    CET not fully enabled (IBT/SHSTK)
+  Summary: 0 high, 0 medium, 4 low, 0 info
+
+$ echo $?
+0
+```
+
+A binary with an executable stack raises a HIGH finding and fails the gate
+(exit 2), so `elfcheck -t` can block a build or deploy without parsing any text:
+
+```console
+$ printf 'int main(void){return 0;}' | gcc -z execstack -no-pie -xc - -o ./vuln
+$ elfcheck --triage ./vuln
+Triage:
+  [HIGH]   executable stack (PT_GNU_STACK is RWX)
+  [LOW]    partial RELRO (GOT not fully protected)
+  [LOW]    no PIE (fixed load address)
+  [LOW]    no stack canary
+  [LOW]    CET not fully enabled (IBT/SHSTK)
+  Summary: 1 high, 0 medium, 4 low, 0 info
+
+$ echo $?
+2
+```
+
+Here `./vuln` is a trivial do-nothing program (`int main`); its only problem is
+the executable stack forced by `-z execstack`, which is exactly what triage
+catches.
 
 ## Features
 
@@ -223,3 +268,33 @@ inconsistencies were found, or a HIGH/MED triage finding tripped the gate.
 ```
 
 Prints the version number and exits.
+
+## Scope, limitations and roadmap
+
+elfcheck is a learning-driven project: the whole stack, from raw syscalls up, is
+hand-written in NASM to understand ELF, x86-64 and security tooling from the
+ground up. That framing shapes what it is — and what it isn't.
+
+Scope by design: 64-bit, little-endian ELF for x86-64 on Linux. 32-bit and
+big-endian ELF, other architectures, and non-ELF formats (PE, Mach-O) are out of
+scope, not oversights.
+
+Limitations to keep in mind:
+
+- The disassembler covers common x86-64 integer instructions plus selected
+  SSE/AVX forms; unsupported encodings fall back to `.byte` and may lose
+  instruction boundaries. It is not a general-purpose disassembler — reach for
+  `objdump` or a Capstone-based tool when you need full coverage.
+- Hardening and triage findings are advisory and static: they judge what the
+  binary *declares*, not what a CPU or loader enforces at runtime, and a clean
+  verdict does not prove the code is bug-free. elfcheck is not a source auditor
+  or a fuzzer.
+- The parser reads untrusted input by hand in assembly, so robustness against
+  deliberately malformed files is an ongoing effort (see the roadmap).
+
+Roadmap / ideas for later:
+
+- [ ] Continuous fuzzing of the parser (e.g. AFL++), beyond today's bounded
+  `make fuzz-smoke` mutation test
+- [ ] Wider instruction coverage in the disassembler
+- [ ] Richer triage heuristics (more dangerous-import and anomaly patterns)
