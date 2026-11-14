@@ -3,7 +3,7 @@
 Notable changes to elfcheck. This file is the source of the GitHub
 release notes: the section matching the tag is published verbatim.
 
-## [Unreleased]
+## [1.1.1] - 2026-11-14
 
 - openSUSE packaging via the openSUSE Build Service (OBS): a from-source spec and
   source service under `packaging/obs/` let OBS build and sign a repository, so
