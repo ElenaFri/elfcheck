@@ -115,7 +115,8 @@ hd_scan_phdrs:
     mov byte [hd_interp], 0
     mov byte [hd_stack], 0
     mov byte [hd_relro_seg], 0
-    movzx r14d, word [ehdr + E_PHNUM]
+    call effective_phnum
+    mov r14, rax
     test r14, r14
     jz .sp_done
     xor r13, r13
@@ -179,21 +180,11 @@ hd_scan_gnu_properties:
     js .hgp_done
     mov [filesize], rax
 
-    movzx r14d, word [ehdr + E_PHNUM]
+    call effective_phnum
+    mov r14, rax
     test r14, r14
     jz .hgp_sections
     movzx r15d, word [ehdr + E_PHENTSIZE]
-    cmp r15d, PHDR_SIZE
-    jb .hgp_sections
-    mov rax, r14
-    mov rcx, r15
-    mul rcx
-    test rdx, rdx
-    jnz .hgp_sections
-    add rax, [ehdr + E_PHOFF]
-    jc .hgp_sections
-    cmp rax, [filesize]
-    ja .hgp_sections
     xor r13, r13
 .hgp_phdr_loop:
     cmp r13, r14
@@ -223,21 +214,11 @@ hd_scan_gnu_properties:
     jmp .hgp_phdr_loop
 
 .hgp_sections:
-    movzx r14d, word [ehdr + E_SHNUM]
+    call effective_shnum
+    mov r14, rax
     test r14, r14
     jz .hgp_done
     movzx r15d, word [ehdr + E_SHENTSIZE]
-    cmp r15d, SHDR_SIZE
-    jb .hgp_done
-    mov rax, r14
-    mov rcx, r15
-    mul rcx
-    test rdx, rdx
-    jnz .hgp_done
-    add rax, [ehdr + E_SHOFF]
-    jc .hgp_done
-    cmp rax, [filesize]
-    ja .hgp_done
     xor r13, r13
 .hgp_shdr_loop:
     cmp r13, r14

@@ -164,7 +164,8 @@ print_entropy_value:
 ; analyze_entropy - the "Entropy:" text report (one line per data section).
 ;   r12=fd, r13=section index, r14=lines printed, r15=section count.
 analyze_entropy:
-    movzx r15d, word [ehdr + E_SHNUM]
+    call effective_shnum
+    mov r15, rax
     test r15, r15
     jz .ae_none
     call load_shstrtab
@@ -234,7 +235,8 @@ json_entropy:
     PRINT j_lbrace
     PRINT jk_sections
     PRINT j_lbrack
-    movzx r15d, word [ehdr + E_SHNUM]
+    call effective_shnum
+    mov r15, rax
     test r15, r15
     jz .je_close
     call load_shstrtab
@@ -313,7 +315,8 @@ scan_packed_sections:
     push r13
     push r14
     push r15
-    movzx r15d, word [ehdr + E_SHNUM]
+    call effective_shnum
+    mov r15, rax
     test r15, r15
     jz .sps_pop
     xor r13, r13

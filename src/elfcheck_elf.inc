@@ -101,7 +101,8 @@ print_header:
 ; Registers: r12=fd (preserved), r13=index, r14=phnum (callee-saved style).
 ; ---------------------------------------------------------------------------
 print_program_headers:
-    movzx r14d, word [ehdr + E_PHNUM]
+    call effective_phnum       ; clamp a malformed e_phnum to what fits the file
+    mov r14, rax
     test r14, r14
     jz .pph_ret
 
@@ -288,7 +289,8 @@ phdr_type_name:
 ; Registers: r12=fd (preserved), r13=index, r14=shnum.
 ; ---------------------------------------------------------------------------
 print_section_headers:
-    movzx r14d, word [ehdr + E_SHNUM]
+    call effective_shnum       ; clamp a malformed e_shnum to what fits the file
+    mov r14, rax
     test r14, r14
     jz .psh_ret
 
@@ -337,10 +339,12 @@ print_section_headers:
 ;             r15=section count, rbx=segment count.
 ; ---------------------------------------------------------------------------
 print_section_to_segment_mapping:
-    movzx r15d, word [ehdr + E_SHNUM]
+    call effective_shnum
+    mov r15, rax
     test r15, r15
     jz .pssm_ret
-    movzx ebx, word [ehdr + E_PHNUM]
+    call effective_phnum
+    mov ebx, eax
     test ebx, ebx
     jz .pssm_ret
     call load_shstrtab
@@ -685,25 +689,71 @@ shdr_type_name:
     ret
 
 ; ---------------------------------------------------------------------------
+; effective_phnum / effective_shnum - return in rax the number of program or
+; section header entries that are safe to enumerate: the declared count when
+; the whole table fits inside the file using the architectural entry size
+; (56 / 64 bytes), otherwise 0. A malformed e_phnum/e_shnum (e.g. the 0xffff
+; the fuzzer injects), a reserved escape value (PN_XNUM / the SHN_LORESERVE
+; range, which are not literal counts), or a bad e_phentsize/e_shentsize
+; therefore stops enumeration instead of driving per-entry reads over arbitrary
+; file bytes, which keeps output bounded on any file size. Requires [filesize];
+; clobbers rcx only.
+; ---------------------------------------------------------------------------
+effective_phnum:
+    movzx ecx, word [ehdr + E_PHENTSIZE]
+    cmp ecx, PHDR_SIZE
+    jne .epn_zero
+    movzx eax, word [ehdr + E_PHNUM]
+    cmp eax, PN_XNUM           ; reserved escape, not a literal count
+    je .epn_zero
+    test eax, eax
+    jz .epn_zero
+    push rax                   ; save declared count
+    imul rax, rcx              ; count * entry size
+    add rax, [ehdr + E_PHOFF]
+    jc .epn_overflow
+    cmp rax, [filesize]
+    ja .epn_overflow
+    pop rax                    ; table fits: trust the declared count
+    ret
+.epn_overflow:
+    add rsp, 8
+.epn_zero:
+    xor eax, eax
+    ret
+
+effective_shnum:
+    movzx ecx, word [ehdr + E_SHENTSIZE]
+    cmp ecx, SHDR_SIZE
+    jne .esn_zero
+    movzx eax, word [ehdr + E_SHNUM]
+    cmp eax, SHN_LORESERVE     ; reserved range, not a literal count
+    jae .esn_zero
+    test eax, eax
+    jz .esn_zero
+    push rax
+    imul rax, rcx
+    add rax, [ehdr + E_SHOFF]
+    jc .esn_overflow
+    cmp rax, [filesize]
+    ja .esn_overflow
+    pop rax
+    ret
+.esn_overflow:
+    add rsp, 8
+.esn_zero:
+    xor eax, eax
+    ret
+
+; ---------------------------------------------------------------------------
 ; validate_structure - sanity-check header fields, segment and section file
 ; ranges against the real file size; report every problem and count them in
-; [issues].  Uses fd in r12; r13=index, r14=count.
+; [issues].  Uses fd in r12; r13=index, r14=count. [filesize] is set once by
+; _start before any enumerator runs.
 ; ---------------------------------------------------------------------------
 validate_structure:
     VP val_title
     mov qword [issues], 0
-
-    mov rdi, r12               ; file size = lseek(fd, 0, SEEK_END)
-    xor esi, esi
-    mov edx, SEEK_END
-    mov rax, SYS_LSEEK
-    syscall
-    mov [filesize], rax
-    test rax, rax
-    jns .size_ok
-    mov rax, 0x7fffffffffffffff   ; error: don't flag everything
-    mov [filesize], rax
-.size_ok:
 
     ; --- ELF header version fields must be current ---
     movzx eax, byte [ehdr + EI_VERSION]
@@ -731,13 +781,34 @@ validate_structure:
 .chk_ehsize:
     movzx eax, word [ehdr + E_EHSIZE]
     cmp eax, EHDR_SIZE
-    je .chk_phentsize
+    je .chk_phnum_xnum
     VP val_mark
     VP m_ehsize
     movzx eax, word [ehdr + E_EHSIZE]
     call vdec
     VP m_exp64
     VP nl
+    inc qword [issues]
+.chk_phnum_xnum:
+    ; --- e_phnum must not be the PN_XNUM escape (0xffff) ---
+    ; It is a legal escape, but the real count then lives in section[0].sh_info,
+    ; which elfcheck does not resolve; reading 0xffff as a literal count would be
+    ; wrong, so flag it rather than silently validate an unparsable table.
+    movzx eax, word [ehdr + E_PHNUM]
+    cmp eax, PN_XNUM
+    jne .chk_shnum_resv
+    VP val_mark
+    VP m_phxnum
+    inc qword [issues]
+.chk_shnum_resv:
+    ; --- e_shnum must not fall in the reserved SHN_LORESERVE..0xffff range ---
+    ; Valid files with that many sections set e_shnum=0 and stash the real count
+    ; in section[0].sh_size; a literal reserved value is malformed.
+    movzx eax, word [ehdr + E_SHNUM]
+    cmp eax, SHN_LORESERVE
+    jb .chk_phentsize
+    VP val_mark
+    VP m_shresv
     inc qword [issues]
 .chk_phentsize:
     ; --- e_phentsize == 56 when phnum > 0 ---
@@ -822,11 +893,21 @@ validate_structure:
     inc qword [issues]
 .chk_segments:
     ; --- per-segment file range checks ---
-    movzx r14d, word [ehdr + E_PHNUM]
+    ; Only enumerate when the whole program header table fits in the file with
+    ; the expected 56-byte stride. Otherwise the declared count is untrustworthy
+    ; (the table-bounds/entsize problems above already report it) and reading
+    ; one "segment" per claimed entry would just interpret arbitrary file bytes
+    ; as headers, producing misleading and potentially unbounded output.
+    call effective_phnum
+    mov r14, rax
+    test r14, r14
+    jz .chk_sections
     xor r13, r13
 .vp_loop:
     cmp r13, r14
     jae .chk_sections
+    cmp qword [issues], VAL_ISSUE_CAP
+    jae .val_capped
     movzx eax, word [ehdr + E_PHENTSIZE]
     imul rax, r13
     add rax, [ehdr + E_PHOFF]
@@ -879,11 +960,19 @@ validate_structure:
     jmp .vp_loop
 .chk_sections:
     ; --- per-section file range checks ---
-    movzx r14d, word [ehdr + E_SHNUM]
+    ; As with segments, only enumerate when the whole section header table fits
+    ; in the file with the expected 64-byte stride; a lying count is reported by
+    ; the table-bounds/entsize checks above and must not drive per-entry output.
+    call effective_shnum
+    mov r14, rax
+    test r14, r14
+    jz .summary
     xor r13, r13
 .vs_loop:
     cmp r13, r14
     jae .summary
+    cmp qword [issues], VAL_ISSUE_CAP
+    jae .val_capped
     movzx eax, word [ehdr + E_SHENTSIZE]
     imul rax, r13
     add rax, [ehdr + E_SHOFF]
@@ -927,6 +1016,9 @@ validate_structure:
 .vs_next:
     inc r13
     jmp .vs_loop
+.val_capped:
+    ; Too many per-entry problems: stop detailing them but still summarise.
+    VP m_more
 .summary:
     cmp qword [issues], 0
     jne .some
@@ -953,7 +1045,8 @@ check_security:
     mov byte [sec_stack], 0            ; assume GNU_STACK absent
     mov byte [sec_entry_ok], 0         ; assume entry not in an exec segment
     ; --- phase 1: program headers ---
-    movzx r14d, word [ehdr + E_PHNUM]
+    call effective_phnum               ; a lying e_phnum must not be walked
+    mov r14, rax
     test r14, r14
     jz .entry_check
     xor r13, r13
@@ -1028,13 +1121,19 @@ check_security:
     inc qword [warnings]
 .sections:
     ; --- phase 2: section headers ---
-    movzx r14d, word [ehdr + E_SHNUM]
-    test r14, r14
-    jnz .have_sections
+    ; A raw count of 0 means the section header table is stripped; a nonzero but
+    ; untrustworthy count (bad entsize, oversized, or a reserved escape) must not
+    ; be walked as a table of real sections.
+    cmp word [ehdr + E_SHNUM], 0
+    jne .have_sections
     VP s_noshdr
     inc qword [warnings]
     jmp .stack
 .have_sections:
+    call effective_shnum
+    mov r14, rax
+    test r14, r14
+    jz .stack
     call load_shstrtab                 ; for section names (overwrites [shdr])
     xor r13, r13
 .sec_loop:
@@ -1105,7 +1204,8 @@ find_section:
     push r13
     push r14
     mov ebx, eax                ; target section type
-    movzx r14d, word [ehdr + E_SHNUM]
+    call effective_shnum
+    mov r14, rax
     xor r13, r13
 .fs_loop:
     cmp r13, r14

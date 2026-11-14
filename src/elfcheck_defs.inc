@@ -39,6 +39,22 @@
 %define ELFDATA2LSB 1
 %define EV_CURRENT  1
 
+; ---- reserved escape values for the header entry counts ----
+; e_phnum == PN_XNUM means the real program-header count lives in the first
+; section header's sh_info; e_shnum in the SHN_LORESERVE..0xffff range is
+; reserved and never a literal section count (the real one lives in the first
+; section header's sh_size when e_shnum is 0). elfcheck does not resolve these
+; extended-numbering escapes, so it must not read the reserved values as literal
+; counts and walk them as a table of entries.
+%define PN_XNUM       0xffff
+%define SHN_LORESERVE 0xff00
+
+; Upper bound on the number of per-entry structural issues validate_structure
+; will print in detail. A deliberately malformed file can claim tens of
+; thousands of bogus segments/sections; past this many problems the file is
+; plainly broken, so further detail is suppressed to keep output bounded.
+%define VAL_ISSUE_CAP 512
+
 ; ---- program header field offsets (Elf64_Phdr, 56 bytes) ----
 %define PHDR_SIZE   56
 %define P_TYPE      0

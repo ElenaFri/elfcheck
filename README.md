@@ -289,12 +289,21 @@ Limitations to keep in mind:
   binary *declares*, not what a CPU or loader enforces at runtime, and a clean
   verdict does not prove the code is bug-free. elfcheck is not a source auditor
   or a fuzzer.
-- The parser reads untrusted input by hand in assembly, so robustness against
-  deliberately malformed files is an ongoing effort (see the roadmap).
+- The parser reads untrusted input by hand in assembly. Header entry counts are
+  bounded against the real file size and reserved escape values are rejected, so
+  a malformed file yields bounded, meaningful output instead of reading padding
+  as phantom headers; robustness against adversarial input nonetheless remains
+  an ongoing effort (see the roadmap).
+- The extended-numbering escapes are not resolved: a file that legitimately uses
+  `PN_XNUM` (>= 0xffff program headers) or `SHN_XINDEX` (>= 0xff00 sections,
+  with the real count in section 0) is flagged as unsupported rather than fully
+  parsed. Such files are vanishingly rare in practice.
 
 Roadmap / ideas for later:
 
 - [ ] Continuous fuzzing of the parser (e.g. AFL++), beyond today's bounded
-  `make fuzz-smoke` mutation test
+  `make fuzz-smoke` mutation test (which now also mutates large, padded inputs)
+- [ ] Resolve the `PN_XNUM` / `SHN_XINDEX` extended-numbering escapes instead of
+  flagging them as unsupported
 - [ ] Wider instruction coverage in the disassembler
 - [ ] Richer triage heuristics (more dangerous-import and anomaly patterns)

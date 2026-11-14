@@ -158,6 +158,44 @@ check "bad EI_VERSION is detected" 2 "$code" "unexpected e_ident version=0" "$ou
 out="$("$RUN_BIN" --validate "$(corrupt_copy version.elf 20 0 4)" 2>&1)"; code=$?
 check "bad e_version is detected" 2 "$code" "unexpected e_version=0" "$out"
 
+# 6c. Reserved / escape header counts (PN_XNUM and the SHN_LORESERVE range) are
+#     not literal counts: they must be flagged, and -- critically -- must never
+#     be walked as a table, even on a large file where the bogus table would
+#     "fit". This guards the deliberately-malformed-input robustness goal.
+out="$("$RUN_BIN" --validate "$(corrupt_copy phnum-xnum.elf 56 65535 2)" 2>&1)"; code=$?
+check "e_phnum PN_XNUM escape is flagged" 2 "$code" "PN_XNUM" "$out"
+out="$("$RUN_BIN" --validate "$(corrupt_copy shnum-resv.elf 60 65280 2)" 2>&1)"; code=$?
+check "e_shnum reserved range is flagged" 2 "$code" "reserved SHN_LORESERVE" "$out"
+
+if command -v python3 >/dev/null 2>&1; then
+    # Pad a known-good ELF to 5 MiB so a 0xffff*entsize header table fits inside
+    # the file; a bogus count must still not drive megabytes of output.
+    for spec in "phnum:56:65535" "shnum:60:65535" "shnum:60:65280"; do
+        field="${spec%%:*}"; rest="${spec#*:}"; off="${rest%%:*}"; val="${rest##*:}"
+        big="$TMP/big-$field-$val.elf"
+        python3 - "$BIN" "$big" "$off" "$val" <<'PY'
+import sys, struct
+src, dst, off, val = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
+data = bytearray(open(src, 'rb').read())
+target = 5 * 1024 * 1024
+if len(data) < target:
+    data.extend(b'\x00' * (target - len(data)))
+struct.pack_into('<H', data, off, val)
+open(dst, 'wb').write(data)
+PY
+        "$RUN_BIN" --json "$big" >"$TMP/big-$field-$val.out" 2>&1; code=$?
+        size=$(wc -c <"$TMP/big-$field-$val.out")
+        if [[ "$code" == 2 && "$size" -lt 2097152 ]]; then
+            echo "  PASS: large $field=$val keeps --json output bounded"
+            pass=$((pass + 1))
+        else
+            echo "  FAIL: large $field=$val keeps --json output bounded"
+            echo "        expected exit=2 and size<2097152; got exit=$code size=$size"
+            fail=$((fail + 1))
+        fi
+    done
+fi
+
 if command -v python3 >/dev/null 2>&1; then
     python3 - "$BIN" "$TMP" <<'PY'
 import pathlib

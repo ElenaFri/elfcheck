@@ -40,21 +40,11 @@ print_notes:
 
 ; notes_scan_sections - run scan_note_range over every SHT_NOTE section.
 notes_scan_sections:
-    movzx r14d, word [ehdr + E_SHNUM]
+    call effective_shnum
+    mov r14, rax
     test r14, r14
     jz .nss_done
     movzx r15d, word [ehdr + E_SHENTSIZE]
-    cmp r15d, SHDR_SIZE
-    jb .nss_done
-    mov rax, r14
-    mov rcx, r15
-    mul rcx
-    test rdx, rdx
-    jnz .nss_done
-    add rax, [ehdr + E_SHOFF]
-    jc .nss_done
-    cmp rax, [filesize]
-    ja .nss_done
     xor r13, r13
 .nss_loop:
     cmp r13, r14
@@ -84,21 +74,11 @@ notes_scan_sections:
 
 ; notes_scan_segments - fallback: run scan_note_range over every PT_NOTE segment.
 notes_scan_segments:
-    movzx r14d, word [ehdr + E_PHNUM]
+    call effective_phnum
+    mov r14, rax
     test r14, r14
     jz .nsg_done
     movzx r15d, word [ehdr + E_PHENTSIZE]
-    cmp r15d, PHDR_SIZE
-    jb .nsg_done
-    mov rax, r14
-    mov rcx, r15
-    mul rcx
-    test rdx, rdx
-    jnz .nsg_done
-    add rax, [ehdr + E_PHOFF]
-    jc .nsg_done
-    cmp rax, [filesize]
-    ja .nsg_done
     xor r13, r13
 .nsg_loop:
     cmp r13, r14

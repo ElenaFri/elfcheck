@@ -107,6 +107,26 @@ def build_cases(original, target_name, random_cases):
         VALIDATE_ARGS,
     )
 
+    # Large-file variants: pad so that a 0xffff*entsize header table *fits*
+    # inside the file, then inject a reserved/escape or oversized count. The
+    # parser must refuse to walk it (bounded output, meaningful exit) instead of
+    # reading megabytes of padding as phantom headers -- the failure mode that
+    # a count fitting a small file never exposes. Validate/triage output stays
+    # tiny regardless of file size, so these respect MAX_OUTPUT_BYTES.
+    def large(name, updates, mode_args):
+        data = bytearray(original)
+        pad = 5 * 1024 * 1024
+        if len(data) < pad:
+            data.extend(b"\x00" * (pad - len(data)))
+        for offset, fmt, value in updates:
+            struct.pack_into(fmt, data, offset, value)
+        add(name, bytes(data), mode_args)
+
+    large("large-program-count-pn-xnum", [(56, "H", 0xFFFF)], VALIDATE_ARGS)
+    large("large-section-count-reserved", [(60, "H", 0xFF00)], VALIDATE_ARGS)
+    large("large-section-count-maximum", [(60, "H", 0xFFFF)], TRIAGE_ARGS)
+    large("large-program-count-pn-xnum-triage", [(56, "H", 0xFFFF)], TRIAGE_ARGS)
+
     corrupted = corrupt_string_case(original)
     if corrupted is not None:
         add("non-ascii-string", corrupted, JSON_ARGS)

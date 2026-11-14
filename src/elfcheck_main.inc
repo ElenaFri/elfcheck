@@ -219,6 +219,20 @@ _start:
     cmp byte [ehdr + EI_DATA], ELFDATA2LSB
     jne .unsupported
 
+    ; --- record the real file size once, for every downstream enumerator ---
+    ; (validation, segment/section listings, JSON, entropy, ...). Clamping
+    ; declared counts against it is what keeps malformed files bounded.
+    mov rdi, r12
+    xor esi, esi
+    mov edx, SEEK_END
+    mov rax, SYS_LSEEK
+    syscall
+    test rax, rax
+    jns .have_filesize
+    mov rax, 0x7fffffffffffffff   ; lseek failed: don't let it flag everything
+.have_filesize:
+    mov [filesize], rax
+
     cmp byte [disasm_mode], 0
     jne .emit_disasm
     cmp byte [dump_mode], 0

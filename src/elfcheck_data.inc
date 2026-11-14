@@ -168,7 +168,10 @@ section .rodata
     m_size:         db " size=", 0
     m_fmgt:         db " has p_filesz > p_memsz", 0
     m_rparen:       db ")", 0
+    m_phxnum:       db "e_phnum=0xffff uses the PN_XNUM escape (extended program-header count unsupported)", 10, 0
+    m_shresv:       db "e_shnum is in the reserved SHN_LORESERVE range (>= 0xff00)", 10, 0
     m_issues:       db " issue(s) found", 10, 0
+    m_more:         db "  [!] further structural issues suppressed", 10, 0
 
     ; ---- security analysis messages ----
     sec_title:      db 10, "Security:", 10, 0

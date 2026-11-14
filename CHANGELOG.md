@@ -3,6 +3,21 @@
 Notable changes to elfcheck. This file is the source of the GitHub
 release notes: the section matching the tag is published verbatim.
 
+## [Unreleased]
+
+- Hardened the parser against deliberately malformed header entry counts: a
+  bogus `e_phnum`/`e_shnum` (including the reserved `PN_XNUM` escape and the
+  `SHN_LORESERVE` range) is no longer walked as a real table, so no report mode
+  can be driven into unbounded output by reading file padding as phantom
+  program/section headers. Enumeration is now bounded by what actually fits the
+  file through a single `effective_phnum`/`effective_shnum` choke point, and the
+  reserved escape values are flagged by `--validate`
+- `--security` no longer emits false `W^X` segment warnings from reading padding
+  past a lying `e_phnum`
+- Fuzz smoke test now also mutates large (padded) inputs so the
+  "bogus-count-that-fits" class is covered, plus regression tests for bounded
+  output on malformed counts
+
 ## [1.1.0] - 2026-11-01
 
 - `--entropy`: per-section Shannon entropy (bits/byte) to flag packed,

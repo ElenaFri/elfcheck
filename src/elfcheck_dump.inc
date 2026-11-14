@@ -45,7 +45,8 @@ find_section_by_name:
     push r14
     push r15
     mov r15, rsi                    ; target name
-    movzx r14d, word [ehdr + E_SHNUM]
+    call effective_shnum
+    mov r14, rax
     xor r13, r13
 .fn_loop:
     cmp r13, r14

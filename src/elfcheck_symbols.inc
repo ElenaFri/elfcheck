@@ -28,21 +28,11 @@ prepare_symbol_versions:
     js .psv_done
     mov [filesize], rax
 
-    movzx r14d, word [ehdr + E_SHNUM]
+    call effective_shnum
+    mov r14, rax
     test r14, r14
     jz .psv_done
     movzx r15d, word [ehdr + E_SHENTSIZE]
-    cmp r15d, SHDR_SIZE
-    jb .psv_done
-    mov rax, r14
-    mov rcx, r15
-    mul rcx
-    test rdx, rdx
-    jnz .psv_done
-    add rax, [ehdr + E_SHOFF]
-    jc .psv_done
-    cmp rax, [filesize]
-    ja .psv_done
 
     xor r13, r13
 .psv_scan:
@@ -606,20 +596,10 @@ walk_symbol_tables:
     js .wst_done
     mov [filesize], rax
 
-    movzx r14d, word [ehdr + E_SHNUM]
+    call effective_shnum
+    mov r14, rax
     test r14, r14
     jz .wst_done
-    movzx ecx, word [ehdr + E_SHENTSIZE]
-    cmp ecx, SHDR_SIZE
-    jb .wst_done
-    mov rax, r14
-    mul rcx
-    test rdx, rdx
-    jnz .wst_done
-    add rax, [ehdr + E_SHOFF]
-    jc .wst_done
-    cmp rax, [filesize]
-    ja .wst_done
 
     call load_shstrtab
     xor r13, r13
@@ -1098,20 +1078,10 @@ walk_relocation_tables:
     js .wrt_done
     mov [filesize], rax
 
-    movzx r14d, word [ehdr + E_SHNUM]
+    call effective_shnum
+    mov r14, rax
     test r14, r14
     jz .wrt_done
-    movzx ecx, word [ehdr + E_SHENTSIZE]
-    cmp ecx, SHDR_SIZE
-    jb .wrt_done
-    mov rax, r14
-    mul rcx
-    test rdx, rdx
-    jnz .wrt_done
-    add rax, [ehdr + E_SHOFF]
-    jc .wrt_done
-    cmp rax, [filesize]
-    ja .wrt_done
 
     call load_shstrtab
     xor r13, r13

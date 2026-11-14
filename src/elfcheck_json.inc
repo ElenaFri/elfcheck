@@ -124,7 +124,8 @@ json_header:
 json_phdrs:
     PRINT jk_phdrs
     PRINT j_lbrack
-    movzx r14d, word [ehdr + E_PHNUM]
+    call effective_phnum        ; clamp a malformed e_phnum to what fits the file
+    mov r14, rax
     xor r13, r13
 .jp_loop:
     cmp r13, r14
@@ -199,7 +200,8 @@ json_one_phdr:
 json_shdrs:
     PRINT jk_shdrs
     PRINT j_lbrack
-    movzx r14d, word [ehdr + E_SHNUM]
+    call effective_shnum        ; clamp a malformed e_shnum to what fits the file
+    mov r14, rax
     test r14, r14
     jz .js_done
     call load_shstrtab

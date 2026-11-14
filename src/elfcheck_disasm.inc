@@ -38,7 +38,8 @@ find_function_symbol:
     ret
 
 .scan_type:
-    movzx r14d, word [ehdr + E_SHNUM]
+    call effective_shnum
+    mov r14, rax
     xor r13d, r13d
 .section_loop:
     cmp r13, r14
@@ -460,20 +461,10 @@ build_disasm_relocation_cache:
     test rax, rax
     js .bdrc_done
     mov [filesize], rax
-    movzx r14d, word [ehdr + E_SHNUM]
+    call effective_shnum
+    mov r14, rax
     test r14, r14
     jz .bdrc_done
-    movzx ecx, word [ehdr + E_SHENTSIZE]
-    cmp ecx, SHDR_SIZE
-    jb .bdrc_done
-    mov rax, r14
-    mul rcx
-    test rdx, rdx
-    jnz .bdrc_done
-    add rax, [ehdr + E_SHOFF]
-    jc .bdrc_done
-    cmp rax, [filesize]
-    ja .bdrc_done
 
     xor r13d, r13d
 .bdrc_scan:
@@ -660,7 +651,8 @@ disassemble:
     mov qword [sel_off], -1
     mov qword [sel_index], 0
     mov qword [text_trunc], 0
-    movzx r14d, word [ehdr + E_SHNUM]
+    call effective_shnum
+    mov r14, rax
     test r14, r14
     jnz .have_sections
     cmp qword [function_name], 0
