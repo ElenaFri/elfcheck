@@ -14,6 +14,7 @@ readonly CALLEE_ANNOTATION='<elfcheck_callee>'
 readonly USAGE_HEADING='Usage:'
 readonly ELF_HEADER_HEADING='ELF Header:'
 readonly HARDENING_HEADING='Hardening:'
+readonly TRIAGE_HIGH_TAG='[HIGH]'
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$ROOT/elfcheck"
@@ -1202,14 +1203,14 @@ fi
 out="$("$RUN_BIN" --triage "$BIN" 2>&1)"; code=$?
 check "triage shows Triage heading"        0 "$code" "Triage:"   "$out"
 check "triage prints a summary line"       0 "$code" "Summary:"  "$out"
-check_absent "triage: clean self has no HIGH" 0 "$code" "[HIGH]" "$out"
+check_absent "triage: clean self has no HIGH" 0 "$code" "$TRIAGE_HIGH_TAG" "$out"
 
 out="$("$RUN_BIN" -t "$BIN" 2>&1)"; code=$?
 check "-t alias shows Triage heading"      0 "$code" "Triage:"   "$out"
 
 # structural problems -> HIGH finding, exit 2 (CI gate trips)
 out="$("$RUN_BIN" --triage "$TMP/truncated.elf" 2>&1)"; code=$?
-check "triage flags structural issue HIGH" 2 "$code" "[HIGH]"     "$out"
+check "triage flags structural issue HIGH" 2 "$code" "$TRIAGE_HIGH_TAG" "$out"
 check "triage gate fails on structural"    2 "$code" "structural" "$out"
 
 # non-ELF is still a hard error (exit 1), not a triage result
@@ -1236,7 +1237,7 @@ fi
 if [[ -r "$TMP/noshdr.elf" ]]; then
     out="$("$RUN_BIN" --triage "$TMP/noshdr.elf" 2>&1)"; code=$?
     check "triage flags stripped sections LOW" 0 "$code" "no section headers" "$out"
-    check_absent "triage: stripped sections do not gate CI" 0 "$code" "[HIGH]" "$out"
+    check_absent "triage: stripped sections do not gate CI" 0 "$code" "$TRIAGE_HIGH_TAG" "$out"
 fi
 if [[ -r "$TMP/es.elf" ]]; then
     out="$("$RUN_BIN" --triage "$TMP/es.elf" 2>&1)"; code=$?
@@ -1245,7 +1246,7 @@ fi
 if [[ -r "$TMP/nopie.elf" ]]; then
     out="$("$RUN_BIN" --triage "$TMP/nopie.elf" 2>&1)"; code=$?
     check "triage reports no-PIE as LOW"     0 "$code" "no PIE"     "$out"
-    check_absent "triage: no-PIE does not gate CI" 0 "$code" "[HIGH]" "$out"
+    check_absent "triage: no-PIE does not gate CI" 0 "$code" "$TRIAGE_HIGH_TAG" "$out"
 fi
 
 # dangerous / capability imports surfaced from .dynsym
@@ -1255,7 +1256,7 @@ if command -v gcc >/dev/null 2>&1; then
         out="$("$RUN_BIN" --triage "$TMP/caps.elf" 2>&1)"; code=$?
         check "triage flags command execution LOW" 0 "$code" "command/process execution" "$out"
         check "triage flags network import INFO"    0 "$code" "network functions" "$out"
-        check_absent "triage: capability imports do not gate CI" 0 "$code" "[HIGH]" "$out"
+        check_absent "triage: capability imports do not gate CI" 0 "$code" "$TRIAGE_HIGH_TAG" "$out"
     fi
     # gets() is banned -> MED finding, CI gate trips (links with a warning)
     printf 'extern char *gets(char*);\nchar b[16];\nint main(void){gets(b);return 0;}\n' > "$TMP/gets.c"

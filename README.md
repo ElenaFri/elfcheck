@@ -93,6 +93,12 @@ On Debian/Ubuntu:
 sudo apt install nasm binutils make gcc python3
 ```
 
+On openSUSE:
+
+```bash
+sudo zypper install nasm binutils make gcc python3
+```
+
 ## Build
 
 ```bash
@@ -116,9 +122,61 @@ make install PREFIX=~/.local
 make uninstall
 ```
 
-Releases also ship a dependency-free static binary and a `.deb`
-(`apt install ./elfcheck_<version>_amd64.deb`), built and attached
-automatically from a version tag.
+### Install on openSUSE (recommended)
+
+elfcheck is built and signed by the [openSUSE Build
+Service](https://build.opensuse.org), so you install it from a repository and
+get automatic updates — no key juggling:
+
+```bash
+sudo zypper addrepo --refresh \
+  https://download.opensuse.org/repositories/home:/ElenaFri/openSUSE_Tumbleweed/home:ElenaFri.repo
+sudo zypper --gpg-auto-import-keys refresh
+sudo zypper install elfcheck
+```
+
+The one-time `addrepo` establishes trust in the repository's signing key; after
+that, installs and updates need no extra flags. (Adjust the distribution in the
+URL for Leap or Fedora.) Maintainer setup for this repository lives in
+[`packaging/obs/`](packaging/obs/README.md).
+
+### Standalone packages from a release
+
+Releases also ship a dependency-free static binary, a `.deb` and an `.rpm`
+(GPG-signed when a signing key is configured), built and attached automatically
+from a version tag. The `.deb` installs directly, since `dpkg`/`apt` do not
+GPG-check a local file:
+
+```bash
+sudo apt install ./elfcheck_<version>_amd64.deb
+```
+
+RPM tooling *does* verify signatures. Import the release's public key once, then
+`zypper`/`dnf`/`rpm` install without warnings:
+
+```bash
+sudo rpm --import ./RPM-GPG-KEY-elfcheck                  # attached to the release
+sudo zypper install ./elfcheck-<version>-1.x86_64.rpm     # or: dnf install / rpm -i
+```
+
+To install without importing the key, skip verification instead with
+`sudo zypper --no-gpg-checks install ./elfcheck-<version>-1.x86_64.rpm` (or
+`sudo rpm -i`, which does not verify signatures).
+
+Both packages hold the same freestanding static binary, so they carry no runtime
+dependencies. Build either locally with `make deb` (needs `dpkg-deb`) or
+`make rpm` (needs `rpmbuild`, from `rpm-build` on openSUSE or `rpm` on
+Debian/Ubuntu), and sign the RPM with `make rpm-sign GPG_NAME=<key>`; all read
+the version from a single source of truth in the NASM source. Without
+`rpmbuild`, `python3 packaging/check_spec.py` validates the spec (metadata,
+payload and absence of runtime dependencies) using the `python3-rpm` bindings
+alone.
+
+Release signing is optional and automatic: set a `GPG_PRIVATE_KEY` secret (an
+ASCII-armored private key, plus `GPG_PASSPHRASE` if the key has one) in the
+repository's GitHub Actions secrets. CI then signs the `.rpm` and attaches the
+matching `RPM-GPG-KEY-elfcheck` public key to the release; with no secret set it
+ships an unsigned `.rpm` instead.
 
 Measure NASM source-line coverage with `kcov` (the HTML report is written to
 `coverage/index.html`):

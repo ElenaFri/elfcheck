@@ -8,6 +8,11 @@
 /elfcheck
 /vuln
 *.deb
+*.rpm
+
+# Python artifacts (e.g. from packaging/check_spec.py)
+__pycache__/
+*.pyc
 
 # Debugging and profiling
 core

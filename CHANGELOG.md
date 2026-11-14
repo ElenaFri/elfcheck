@@ -5,6 +5,18 @@ release notes: the section matching the tag is published verbatim.
 
 ## [Unreleased]
 
+- openSUSE packaging via the openSUSE Build Service (OBS): a from-source spec and
+  source service under `packaging/obs/` let OBS build and sign a repository, so
+  users install with a plain `zypper install elfcheck` (no key import or
+  `--no-gpg-checks`) and get automatic updates
+- Releases now also ship an `.rpm` alongside the `.deb` and the static binary
+  (`zypper install ./elfcheck-<version>-1.x86_64.rpm`), built and attached
+  automatically from a version tag. Build it locally with `make rpm`; it holds
+  the same dependency-free static binary, so it installs on any RPM distribution
+- The released `.rpm` is GPG-signed when a `GPG_PRIVATE_KEY` secret is set, and
+  the matching public key (`RPM-GPG-KEY-elfcheck`) is attached to the release so
+  `zypper`/`dnf`/`rpm` verify and install it cleanly; sign locally with
+  `make rpm-sign GPG_NAME=<key>`
 - Hardened the parser against deliberately malformed header entry counts: a
   bogus `e_phnum`/`e_shnum` (including the reserved `PN_XNUM` escape and the
   `SHN_LORESERVE` range) is no longer walked as a real table, so no report mode

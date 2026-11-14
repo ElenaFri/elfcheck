@@ -10,6 +10,9 @@
 #   make coverage   run tests under kcov and generate a source coverage report
 #   make install    install the binary and manpage (PREFIX=/usr/local, DESTDIR=)
 #   make uninstall  remove them
+#   make deb        package the static binary and manpage as a .deb
+#   make rpm        package the static binary and manpage as an .rpm
+#   make rpm-sign   GPG-sign the built .rpm (GPG_NAME=key)
 #   make clean      remove build and coverage artifacts
 
 PREFIX ?= /usr/local
@@ -31,21 +34,41 @@ SRCS := $(wildcard $(SRC_DIR)/*.asm)
 INCS := $(wildcard $(SRC_DIR)/*.inc)
 OBJS := $(patsubst $(SRC_DIR)/%.asm,$(BUILD_DIR)/%.o,$(SRCS))
 
-# The .deb version comes from the version string in the source, so there is a
-# single source of truth: bump version_msg in src/elfcheck_data.inc.
-DEB_VERSION := $(shell sed -n 's/^    version_msg:.*"elfcheck v\([0-9][0-9.]*\)".*/\1/p' $(SRC_DIR)/elfcheck_data.inc)
+# The package version comes from the version string in the source, so there is a
+# single source of truth shared by the .deb and .rpm: bump version_msg in
+# src/elfcheck_data.inc.
+PKG_VERSION := $(shell sed -n 's/^    version_msg:.*"elfcheck v\([0-9][0-9.]*\)".*/\1/p' $(SRC_DIR)/elfcheck_data.inc)
 DEB_ROOT := $(BUILD_DIR)/deb
 # Debian packages install to /usr, not the optional PREFIX location.
 DEB_BINDIR := usr/bin
 DEB_MANDIR := usr/share/man/man1
-DEB      := elfcheck_$(DEB_VERSION)_amd64.deb
+DEB      := elfcheck_$(PKG_VERSION)_amd64.deb
+
+# RPM packaging (openSUSE, Fedora, ...). The freestanding static binary has no
+# runtime dependencies, so the package is portable across RPM distributions and
+# can even be built on a non-RPM CI runner that provides rpmbuild.
+RPM_RELEASE ?= 1
+RPM_ARCH    := x86_64
+RPM_ROOT    := $(BUILD_DIR)/rpm
+RPM_SPEC    := packaging/elfcheck.spec
+RPM         := elfcheck-$(PKG_VERSION)-$(RPM_RELEASE).$(RPM_ARCH).rpm
+
+# Detached GPG signing of the RPM (so zypper/dnf install cleanly once the public
+# key is imported). GPG_NAME is the signing key id or email; the key must already
+# be in the GPG keyring. For an automated/CI key prefer a passphrase-less key
+# (the secret store is the protection); otherwise point GPG_PASSPHRASE_FILE at a
+# file holding the passphrase. The sign command pins SHA-256 and loopback
+# pinentry so it never blocks on a prompt.
+GPG_NAME ?=
+GPG_PASSPHRASE_FILE ?=
+RPM_SIGN_CMD = %{__gpg} gpg --batch --no-verbose --no-armor --pinentry-mode loopback $(if $(GPG_PASSPHRASE_FILE),--passphrase-file $(GPG_PASSPHRASE_FILE) )--no-secmem-warning -u %{_gpg_name} -sbo %{__signature_filename} --digest-algo sha256 %{__plaintext_filename}
 
 # Keep -Wall; suppress only the expected cross-section relative dword references
 # and absolute qword pointers in dispatch tables used by the non-PIE binary.
 NASMFLAGS ?= -f elf64 -g -F dwarf -Wall -w-reloc-rel-dword -w-reloc-abs-qword
 LDFLAGS   ?= -nostdlib -no-pie
 
-.PHONY: all run test fuzz-smoke coverage install uninstall deb clean
+.PHONY: all run test fuzz-smoke coverage install uninstall deb rpm rpm-sign clean
 
 all: $(TARGET)
 
@@ -103,7 +126,7 @@ uninstall:
 
 # Package the static binary and manpage as a Debian package.
 deb: $(TARGET) $(MANPAGE)
-	@if [ -z "$(DEB_VERSION)" ]; then \
+	@if [ -z "$(PKG_VERSION)" ]; then \
 		echo "error: cannot extract version from $(SRC_DIR)/elfcheck_data.inc" >&2; \
 		exit 1; \
 	fi
@@ -112,8 +135,52 @@ deb: $(TARGET) $(MANPAGE)
 	install -m 0755 "$(TARGET)" "$(DEB_ROOT)/$(DEB_BINDIR)/$(TARGET)"
 	install -m 0644 "$(MANPAGE)" "$(DEB_ROOT)/$(DEB_MANDIR)/"
 	printf 'Package: elfcheck\nVersion: %s\nSection: utils\nPriority: optional\nArchitecture: amd64\nMaintainer: Elena FRISON <ElenaFri@users.noreply.github.com>\nDescription: validate and inspect ELF64 binaries\n Freestanding ELF64 inspector written in NASM (no libc, direct syscalls):\n parses headers, symbols, relocations and dynamic tags; disassembles\n code; reports notes, hardening and triage verdicts; optional JSON output.\n' \
-		"$(DEB_VERSION)" > "$(DEB_ROOT)/DEBIAN/control"
+		"$(PKG_VERSION)" > "$(DEB_ROOT)/DEBIAN/control"
 	dpkg-deb --build --root-owner-group "$(DEB_ROOT)" "$(DEB)"
 
+# Package the static binary and manpage as an RPM. Version and release are
+# injected into packaging/elfcheck.spec from the single source of truth above,
+# and the build tree is kept self-contained under $(RPM_ROOT) so it never
+# touches ~/rpmbuild.
+rpm: $(TARGET) $(MANPAGE) $(RPM_SPEC)
+	@if [ -z "$(PKG_VERSION)" ]; then \
+		echo "error: cannot extract version from $(SRC_DIR)/elfcheck_data.inc" >&2; \
+		exit 1; \
+	fi
+	@command -v rpmbuild >/dev/null 2>&1 || { \
+		echo "error: rpmbuild is required (openSUSE: sudo zypper install rpm-build; Debian/Ubuntu: sudo apt install rpm)" >&2; \
+		exit 1; \
+	}
+	$(RM) -r "$(RPM_ROOT)"
+	install -d "$(RPM_ROOT)/SOURCES" "$(RPM_ROOT)/BUILD" "$(RPM_ROOT)/RPMS" "$(RPM_ROOT)/BUILDROOT"
+	install -m 0755 "$(TARGET)" "$(RPM_ROOT)/SOURCES/$(TARGET)"
+	install -m 0644 "$(MANPAGE)" "$(RPM_ROOT)/SOURCES/elfcheck.1"
+	rpmbuild -bb --target "$(RPM_ARCH)" \
+		--define "_topdir $(CURDIR)/$(RPM_ROOT)" \
+		--define "_sourcedir $(CURDIR)/$(RPM_ROOT)/SOURCES" \
+		--define "version $(PKG_VERSION)" \
+		--define "release $(RPM_RELEASE)" \
+		"$(RPM_SPEC)"
+	cp "$(RPM_ROOT)/RPMS/$(RPM_ARCH)/$(RPM)" "$(RPM)"
+
+# GPG-sign the built RPM in place. Run after `make rpm`. Keeping this separate
+# from `rpm` means an unsigned package is still produced when no key is
+# configured (e.g. before the CI signing secret is set).
+rpm-sign:
+	@test -f "$(RPM)" || { echo "error: $(RPM) not found; run 'make rpm' first" >&2; exit 1; }
+	@if [ -z "$(GPG_NAME)" ]; then \
+		echo "error: set GPG_NAME to the signing key id or email" >&2; \
+		exit 1; \
+	fi
+	@command -v rpmsign >/dev/null 2>&1 || { \
+		echo "error: rpmsign is required (openSUSE: sudo zypper install rpm-sign; Debian/Ubuntu: sudo apt install rpm)" >&2; \
+		exit 1; \
+	}
+	rpmsign --addsign \
+		--define "_gpg_name $(GPG_NAME)" \
+		--define "__gpg_sign_cmd $(RPM_SIGN_CMD)" \
+		"$(RPM)"
+	rpm -Kv "$(RPM)" || true
+
 clean:
-	rm -rf $(BUILD_DIR) $(TARGET) "$(COVERAGE_DIR)" "$(DEB)"
+	rm -rf $(BUILD_DIR) $(TARGET) "$(COVERAGE_DIR)" "$(DEB)" "$(RPM)"

@@ -79,13 +79,39 @@ jobs:
       - name: Install toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y nasm binutils make
+          sudo apt-get install -y nasm binutils make rpm gnupg
 
       - name: Build and package
         run: |
           make
           make deb
+          make rpm
           cp elfcheck "elfcheck-${GITHUB_REF_NAME}-linux-amd64"
+
+      - name: Sign the RPM
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          if [ -z "$GPG_PRIVATE_KEY" ]; then
+            echo "No GPG_PRIVATE_KEY secret set; shipping an unsigned RPM." >&2
+            exit 0
+          fi
+          printf '%s\n' "$GPG_PRIVATE_KEY" | gpg --batch --import
+          keyid="$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/{print $5; exit}')"
+          if [ -z "$keyid" ]; then
+            echo "error: imported GPG key but could not determine its key id" >&2
+            exit 1
+          fi
+          passargs=()
+          if [ -n "$GPG_PASSPHRASE" ]; then
+            printf '%s' "$GPG_PASSPHRASE" > gpg-passphrase
+            passargs=(GPG_PASSPHRASE_FILE="$PWD/gpg-passphrase")
+          fi
+          make rpm-sign GPG_NAME="$keyid" "${passargs[@]}"
+          rm -f gpg-passphrase
+          # Publish the matching public key so users can import and verify it.
+          gpg --batch --armor --export "$keyid" > RPM-GPG-KEY-elfcheck
 
       - name: Extract release notes from the changelog
         run: |
@@ -104,7 +130,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          assets=("elfcheck-${GITHUB_REF_NAME}-linux-amd64" elfcheck_*_amd64.deb)
+          assets=("elfcheck-${GITHUB_REF_NAME}-linux-amd64" elfcheck_*_amd64.deb elfcheck-*.x86_64.rpm)
+          if [ -f RPM-GPG-KEY-elfcheck ]; then assets+=(RPM-GPG-KEY-elfcheck); fi
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber
           else

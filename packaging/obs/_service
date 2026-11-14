@@ -1,0 +1,28 @@
+<!--
+  OBS source service for elfcheck.
+
+  On the OBS server (triggered on commit, or locally via `osc service runall`)
+  this checks out the elfcheck git repository at the configured tag, produces a
+  versioned source tarball, and rewrites Version: in elfcheck.spec to match the
+  tag - so the package version stays tied to the release tag (which mirrors
+  version_msg in src/elfcheck_data.inc).
+
+  To build a new release: bump the <revision> to the new tag (e.g. v1.2.0) and
+  commit; OBS rebuilds and re-signs the repository automatically.
+-->
+<services>
+  <service name="obs_scm">
+    <param name="url">https://github.com/ElenaFri/elfcheck.git</param>
+    <param name="scm">git</param>
+    <param name="revision">v1.1.0</param>
+    <param name="versionformat">@PARENT_TAG@</param>
+    <param name="versionrewrite-pattern">v(.*)</param>
+    <param name="versionrewrite-replacement">\1</param>
+  </service>
+  <service name="tar" mode="buildtime"/>
+  <service name="recompress" mode="buildtime">
+    <param name="file">*.tar</param>
+    <param name="compression">gz</param>
+  </service>
+  <service name="set_version" mode="buildtime"/>
+</services>
