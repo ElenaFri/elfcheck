@@ -12,6 +12,7 @@ section .rodata
                     db "                   --entropy (per-section Shannon entropy)", 10
                     db "  --help | -h     show this help", 10
                     db "  --version | -v  show version", 10
+                    db "  --no-color      disable colored output (also: NO_COLOR env)", 10
     usage_len:      equ $ - usage_msg
 
     version_msg:    db "elfcheck v1.1.1", 10, 0
@@ -33,6 +34,8 @@ section .rodata
     opt_help_s:     db "-h", 0
     opt_version:    db "--version", 0
     opt_version_s:  db "-v", 0
+    opt_no_color:   db "--no-color", 0
+    nocolor_name:   db "NO_COLOR", 0
 
     open_err_msg:   db "elfcheck: error: cannot open file", 10
     open_err_len:   equ $ - open_err_msg
@@ -912,6 +915,14 @@ section .rodata
     tri_lbl_med:    db "  [MED]    ", 0
     tri_lbl_low:    db "  [LOW]    ", 0
     tri_lbl_info:   db "  [INFO]   ", 0
+
+    ; ---- ANSI colors for severity tags (emitted only when [use_color]) ----
+    ;   ESC is byte 27; sequences are NUL-terminated like every other string.
+    clr_high:       db 27, "[1;31m", 0   ; bold red  -> HIGH
+    clr_med:        db 27, "[33m", 0     ; yellow    -> MED
+    clr_low:        db 27, "[36m", 0     ; cyan      -> LOW
+    clr_info:       db 27, "[90m", 0     ; grey      -> INFO
+    clr_reset:      db 27, "[0m", 0
     tri_m_struct:   db "structural inconsistencies in ELF layout", 0
     tri_m_wxseg:    db "writable and executable PT_LOAD segment (W^X)", 0
     tri_m_xstack:   db "executable stack (PT_GNU_STACK is RWX)", 0
@@ -1124,6 +1135,10 @@ section .bss
     filter_mask:    resd 1             ; selected section bits (0 = use default sections)
     eff_mask:       resd 1             ; effective mask used while printing
     triage_mode:    resb 1             ; 1 = run the triage anomaly scan
+    want_no_color:  resb 1             ; 1 = --no-color given on the command line
+    use_color:      resb 1             ; 1 = colorize output (tty + not JSON + allowed)
+    envp_ptr:       resq 1             ; &envp[0], captured at _start (for NO_COLOR)
+    tty_buf:        resb 64            ; scratch termios for the isatty ioctl
     dump_mode:      resb 1             ; 1 = run a -x / -p section dump
     dump_error:     resb 1             ; 1 = a requested dump section was missing
     hexdump_name:   resq 1             ; -x section name, or 0

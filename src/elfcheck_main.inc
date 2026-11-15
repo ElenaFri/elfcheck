@@ -5,10 +5,13 @@ _start:
     ; --- parse arguments: output-mode and section-filter flags + one path ---
     mov r8, [rsp]              ; argc
     lea r9, [rsp + 8]         ; &argv[0]
+    lea rax, [r9 + r8*8 + 8]  ; &envp[0] = past argv[] and its NULL terminator
+    mov [envp_ptr], rax
     xor r10, r10              ; path pointer (NULL until found)
     mov byte [json_mode], 0
     mov byte [disasm_mode], 0
     mov byte [triage_mode], 0
+    mov byte [want_no_color], 0
     mov byte [tri_json], 0
     mov byte [help_mode], 0
     mov byte [version_mode], 0
@@ -36,6 +39,7 @@ _start:
     MODEARG opt_help_s,   help_mode
     MODEARG opt_version,  version_mode
     MODEARG opt_version_s,version_mode
+    MODEARG opt_no_color, want_no_color
     mov rsi, [r9 + rcx*8]
     lea rdi, [opt_function]
     call streq
@@ -171,6 +175,25 @@ _start:
     inc rcx
     jmp .arg_loop
 .args_done:
+    ; --- decide whether to colorize: only on a real terminal, never for JSON,
+    ;     and never when --no-color or NO_COLOR asks us not to. ---
+    mov byte [use_color], 0
+    cmp byte [want_no_color], 0
+    jne .color_done
+    cmp byte [json_mode], 0       ; JSON (incl. --triage --json) is never colored
+    jne .color_done
+    call env_has_no_color
+    test al, al
+    jnz .color_done
+    mov edi, STDOUT              ; isatty(STDOUT): TCGETS succeeds only on a tty
+    mov esi, TCGETS
+    lea rdx, [tty_buf]
+    mov eax, SYS_IOCTL
+    syscall
+    test rax, rax
+    jnz .color_done
+    mov byte [use_color], 1
+.color_done:
     cmp byte [version_mode], 0 ; --version prints version to stdout and exits 0
     je .not_version
     lea rsi, [version_msg]
@@ -406,5 +429,45 @@ _start:
 .exit:
     mov rax, SYS_EXIT
     syscall
+
+; ---------------------------------------------------------------------------
+; env_has_no_color - al=1 if a NO_COLOR entry is present in the environment.
+;   Walks envp_ptr, matching "NO_COLOR" followed by '=' or end-of-string, so
+;   both NO_COLOR=<anything> (incl. empty) and a bare NO_COLOR disable color,
+;   per no-color.org. Clobbers rax, rcx, rdx, rsi, rdi.
+; ---------------------------------------------------------------------------
+env_has_no_color:
+    mov rsi, [envp_ptr]
+    test rsi, rsi
+    jz .ehnc_no
+.ehnc_loop:
+    mov rdi, [rsi]             ; rdi = envp[i]
+    test rdi, rdi
+    jz .ehnc_no                ; NULL terminator -> not found
+    lea rdx, [nocolor_name]
+    xor ecx, ecx
+.ehnc_cmp:
+    mov al, [rdx + rcx]
+    test al, al
+    jz .ehnc_tail              ; matched all of "NO_COLOR"
+    cmp al, [rdi + rcx]
+    jne .ehnc_next
+    inc rcx
+    jmp .ehnc_cmp
+.ehnc_tail:
+    mov al, [rdi + rcx]        ; byte right after the name in the env entry
+    cmp al, '='
+    je .ehnc_yes
+    test al, al                ; bare "NO_COLOR" with no value
+    jz .ehnc_yes
+.ehnc_next:
+    add rsi, 8
+    jmp .ehnc_loop
+.ehnc_yes:
+    mov al, 1
+    ret
+.ehnc_no:
+    xor al, al
+    ret
 
 ; ---------------------------------------------------------------------------

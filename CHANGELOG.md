@@ -3,6 +3,16 @@
 Notable changes to elfcheck. This file is the source of the GitHub
 release notes: the section matching the tag is published verbatim.
 
+## [Unreleased]
+
+- Colored output: `--triage` now color-codes the severity tags (red for HIGH,
+  yellow for MED, cyan for LOW, grey for INFO), and the `--entropy` `[high]`
+  marker turns red, making the verdict easier to scan at a glance
+- Color is emitted only when standard output is a terminal, so redirected or
+  piped output stays plain and script-friendly; `--json` output is never colored
+- New `--no-color` flag and support for the `NO_COLOR` environment variable
+  (see no-color.org) to disable colored output on a terminal
+
 ## [1.1.1] - 2026-11-14
 
 - openSUSE packaging via the openSUSE Build Service (OBS): a from-source spec and

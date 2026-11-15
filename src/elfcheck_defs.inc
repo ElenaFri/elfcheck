@@ -4,6 +4,7 @@
 %define SYS_OPEN   2
 %define SYS_CLOSE  3
 %define SYS_LSEEK  8
+%define SYS_IOCTL  16
 %define SYS_EXIT   60
 
 %define SEEK_SET   0
@@ -15,6 +16,9 @@
 
 ; ---- open() flags ----
 %define O_RDONLY   0
+
+; ---- ioctl: TCGETS probes stdout for a terminal (our isatty) ----
+%define TCGETS     0x5401
 
 ; ---- ELF header size and field offsets (Elf64_Ehdr) ----
 %define EHDR_SIZE   64

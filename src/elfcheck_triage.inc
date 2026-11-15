@@ -45,8 +45,7 @@ tri_finding:
     cmp byte [tri_json], 0
     jne .tf_json
     ; --- text: "  [SEV]    message\n" ---
-    mov rsi, rdx
-    call print_cstr            ; severity label
+    call tri_print_label       ; severity label (colored when [use_color])
     pop rsi
     call print_cstr            ; message
     lea rsi, [nl]
@@ -71,6 +70,40 @@ tri_finding:
     pop rsi                     ; message (our own safe ASCII strings)
     call jname
     PRINT j_rbrace
+    ret
+
+; tri_print_label - print the severity label, colored when [use_color] is set.
+;   in: al = severity (SEV_*), rdx = label cstr. Clobbers rax, rcx, rdx, rsi,
+;   rdi; leaves the message still on the caller's stack untouched.
+tri_print_label:
+    cmp byte [use_color], 0
+    je .tpl_plain
+    movzx eax, al              ; pick the color for this severity
+    lea rsi, [clr_low]         ; SEV_LOW default
+    cmp eax, SEV_HIGH
+    jne .tpl_not_high
+    lea rsi, [clr_high]
+    jmp .tpl_have
+.tpl_not_high:
+    cmp eax, SEV_MED
+    jne .tpl_not_med
+    lea rsi, [clr_med]
+    jmp .tpl_have
+.tpl_not_med:
+    cmp eax, SEV_INFO
+    jne .tpl_have              ; SEV_LOW already selected
+    lea rsi, [clr_info]
+.tpl_have:
+    push rdx                   ; save label across the color escape
+    call print_cstr            ; color on
+    pop rsi                    ; label
+    call print_cstr
+    lea rsi, [clr_reset]
+    call print_cstr            ; color off
+    ret
+.tpl_plain:
+    mov rsi, rdx
+    call print_cstr
     ret
 
 ; scan_dangerous_imports - set [tri_cap_seen] bits for watched undefined

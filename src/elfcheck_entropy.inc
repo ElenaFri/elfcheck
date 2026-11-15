@@ -211,6 +211,13 @@ analyze_entropy:
     jb .ae_eol
     test qword [shdr + SH_FLAGS], SHF_EXECINSTR
     jz .ae_eol
+    cmp byte [use_color], 0
+    je .ae_high_plain
+    PRINT clr_high
+    PRINT ent_high
+    PRINT clr_reset
+    jmp .ae_eol
+.ae_high_plain:
     PRINT ent_high
 .ae_eol:
     PRINT nl

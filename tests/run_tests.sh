@@ -1294,6 +1294,53 @@ if command -v python3 >/dev/null 2>&1; then
     fi
 fi
 
+# 16c. Colored severity tags: only on a real terminal, never for JSON, and
+#      suppressed by --no-color or NO_COLOR (no-color.org).
+ESC=$'\033'
+# our $(...) capture is a pipe, never a tty -> output must stay plain
+out="$("$RUN_BIN" --triage "$BIN" 2>&1)"; code=$?
+check_absent "triage: piped output has no color" 0 "$code" "$ESC" "$out"
+out="$("$RUN_BIN" -t --json "$BIN" 2>&1)"; code=$?
+check_absent "triage JSON is never colored"      0 "$code" "$ESC" "$out"
+out="$("$RUN_BIN" --no-color --triage "$BIN" 2>&1)"; code=$?
+check_absent "triage: --no-color stays plain"    0 "$code" "$ESC" "$out"
+out="$("$RUN_BIN" --help 2>&1)"; code=$?
+check "--help documents --no-color"              0 "$code" "--no-color" "$out"
+
+# Exercise the real isatty() path through a pty so colors actually fire.
+if command -v python3 >/dev/null 2>&1; then
+    emit_has_esc_on_tty() {
+        python3 - "$RUN_BIN" "$@" <<'PY'
+import pty, os, sys
+chunks = []
+def read(fd):
+    data = os.read(fd, 4096)
+    chunks.append(data)
+    return data
+pty.spawn(sys.argv[1:], read)
+sys.stdout.write("yes" if b"\x1b[" in b"".join(chunks) else "no")
+PY
+    }
+    res="$(emit_has_esc_on_tty --triage "$BIN")"
+    check "tty: triage colors the severity tags"  0 "$?" "yes" "$res"
+    res="$(emit_has_esc_on_tty --no-color --triage "$BIN")"
+    check "tty: --no-color suppresses color"      0 "$?" "no"  "$res"
+    res="$(emit_has_esc_on_tty -t --json "$BIN")"
+    check "tty: JSON output is never colored"      0 "$?" "no"  "$res"
+    export NO_COLOR=1
+    res="$(emit_has_esc_on_tty --triage "$BIN")"
+    check "tty: NO_COLOR=1 suppresses color"       0 "$?" "no"  "$res"
+    unset NO_COLOR
+    export NO_COLOR=
+    res="$(emit_has_esc_on_tty --triage "$BIN")"
+    check "tty: empty NO_COLOR suppresses color"   0 "$?" "no"  "$res"
+    unset NO_COLOR
+    if [[ -r "$TMP/wx.elf" ]]; then
+        res="$(emit_has_esc_on_tty --triage "$TMP/wx.elf")"
+        check "tty: a HIGH finding is colored"     0 "$?" "yes" "$res"
+    fi
+fi
+
 # 17. Entropy / packer detection (--entropy): per-section Shannon entropy.
 out="$("$RUN_BIN" --entropy /bin/ls 2>&1)"; code=$?
 check "--entropy shows the Entropy report" 0 "$code" "Entropy:" "$out"

@@ -45,6 +45,12 @@ Print usage and exit 0.
 .TP
 .B \-\-version\fR, \fB\-v
 Print version and exit 0.
+.TP
+.B \-\-no\-color
+Disable colored output. Colored severity tags are emitted only when standard
+output is a terminal; this flag, or the
+.B NO_COLOR
+environment variable, forces plain text. JSON output is never colored.
 .SS Section filters
 By default the report prints its standard sections; pass filters to show
 only what you need. Symbol and relocation tables are opt-in because they
@@ -114,6 +120,14 @@ JSON for scripting:
 .TP
 Disassemble one function:
 .BR "elfcheck \-\-function main ./app" ""
+.SH ENVIRONMENT
+.TP
+.B NO_COLOR
+When set (to any value, including empty), disables colored output, per
+.IR https://no-color.org .
+Color is also disabled by
+.B \-\-no\-color
+or whenever standard output is not a terminal.
 .SH SEE ALSO
 .BR readelf (1),
 .BR objdump (1),

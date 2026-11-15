@@ -11,43 +11,38 @@ Where `readelf` and `objdump` show you *what* is in a binary, elfcheck also tell
 
 ### Examples
 
+On a terminal, `--triage` color-codes findings by severity (red HIGH, yellow
+MED, cyan LOW, grey INFO). Output stays plain text when redirected or piped, and
+`--json` is never colored.
+
 A severity-ranked verdict with a CI-friendly exit code. A clean binary trips
 nothing and exits 0:
 
-```console
-$ elfcheck --triage ./elfcheck
-Triage:
-  [LOW]    no RELRO (GOT is writable)
-  [LOW]    no PIE (fixed load address)
-  [LOW]    no stack canary
-  [LOW]    CET not fully enabled (IBT/SHSTK)
-  Summary: 0 high, 0 medium, 4 low, 0 info
-
-$ echo $?
-0
-```
+![elfcheck triage of a clean binary: four cyan LOW findings and exit code 0](docs/triage-clean.svg)
 
 A binary with an executable stack raises a HIGH finding and fails the gate
-(exit 2), so `elfcheck -t` can block a build or deploy without parsing any text:
+(exit 2), so `elfcheck -t` can block a build or deploy without parsing any text.
+Here `./vuln` is a trivial do-nothing program whose only problem is the
+executable stack forced by `-z execstack`
+(`printf 'int main(void){return 0;}' | gcc -z execstack -no-pie -xc - -o ./vuln`)
+— exactly what triage catches:
 
-```console
-$ printf 'int main(void){return 0;}' | gcc -z execstack -no-pie -xc - -o ./vuln
-$ elfcheck --triage ./vuln
-Triage:
-  [HIGH]   executable stack (PT_GNU_STACK is RWX)
-  [LOW]    partial RELRO (GOT not fully protected)
-  [LOW]    no PIE (fixed load address)
-  [LOW]    no stack canary
-  [LOW]    CET not fully enabled (IBT/SHSTK)
-  Summary: 1 high, 0 medium, 4 low, 0 info
+![elfcheck triage of a binary with an executable stack: a red HIGH finding over cyan LOW findings, and exit code 2](docs/triage-vuln.svg)
 
-$ echo $?
-2
-```
+Medium findings gate CI too, not just HIGH. This binary is well-hardened (full
+RELRO, canary, NX, PIE, CET) yet still suspicious: a high-entropy — likely
+packed — executable section (MED), a `system()`-style command-execution import
+(LOW) and networking imports (INFO). The MED alone trips the gate (exit 2):
 
-Here `./vuln` is a trivial do-nothing program (`int main`); its only problem is
-the executable stack forced by `-z execstack`, which is exactly what triage
-catches.
+![elfcheck triage of a suspicious binary: a yellow MED, a cyan LOW and a grey INFO finding, and exit code 2](docs/triage-suspicious.svg)
+
+The same palette carries into `--entropy`: a high-entropy executable section —
+the signature of packed, encrypted or compressed code — is flagged `[high]` in
+red, while ordinary sections stay plain. Here `.packed` was injected with
+`objcopy` to mimic a packer; the real `.text` and `.rodata` sit well below the
+threshold:
+
+![elfcheck entropy report: an injected high-entropy .packed section flagged high in red while .text and .rodata stay normal](docs/entropy-packed.svg)
 
 ## Features
 
@@ -304,6 +299,12 @@ gates a build or deploy pipeline without parsing text.
 Add `--json` to get the same verdict as a machine-readable object
 (`triage.findings[]`, `triage.summary`, `triage.gate_failed`) for scripting,
 e.g. `elfcheck -t --json file | jq .triage.gate_failed`.
+
+When standard output is a terminal, the severity tags are color-coded (red
+`HIGH`, yellow `MED`, cyan `LOW`, grey `INFO`) to make the verdict easier to
+scan; redirected or piped output stays plain, and `--json` is never colored.
+Disable color with `--no-color` or the `NO_COLOR` environment variable
+([no-color.org](https://no-color.org)).
 
 `--entropy` reports each section's Shannon entropy in bits/byte (0–8). High
 entropy in an executable section is a classic sign of packed, encrypted or
