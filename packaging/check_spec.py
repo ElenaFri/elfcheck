@@ -102,7 +102,8 @@ print(f"  summary = {dec(summary)}")
 print(f"  requires(non-rpmlib) = {real_requires}")
 print(f"  files   = {files}")
 
-expected_files = ["/usr/bin/elfcheck", "/usr/share/man/man1/elfcheck.1*"]
+expected_files = ["/usr/bin/elfcheck", "/usr/share/licenses/elfcheck/LICENSE",
+                  "/usr/share/man/man1/elfcheck.1*"]
 if files != expected_files:
     errors.append(f"files={files} (expected {expected_files})")
 

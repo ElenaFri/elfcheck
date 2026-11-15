@@ -81,6 +81,27 @@ fi
 
 echo "Running elfcheck tests..."
 
+# 0. Version coherence: version_msg in the NASM source is the single source of
+# truth (the Makefile reads it for packaging); the man page and the OBS spec
+# must not drift from it.
+src_ver="$(sed -n 's/^    version_msg:.*"elfcheck v\([0-9][0-9.]*\)".*/\1/p' "$ROOT/src/elfcheck_data.inc")"
+man_ver="$(sed -n 's/^\.TH ELFCHECK 1 "[^"]*" "elfcheck v\([0-9.]*\)".*/\1/p' "$ROOT/man/elfcheck.1")"
+obs_ver="$(sed -n 's/^Version:[[:space:]]*//p' "$ROOT/packaging/obs/elfcheck.spec")"
+if [[ -n "$src_ver" && "$man_ver" == "$src_ver" ]]; then
+    echo "  PASS: man page version matches version_msg ($src_ver)"
+    pass=$((pass + 1))
+else
+    echo "  FAIL: man page version '$man_ver' does not match version_msg '$src_ver'"
+    fail=$((fail + 1))
+fi
+if [[ -n "$src_ver" && "$obs_ver" == "$src_ver" ]]; then
+    echo "  PASS: OBS spec version matches version_msg ($src_ver)"
+    pass=$((pass + 1))
+else
+    echo "  FAIL: OBS spec version '$obs_ver' does not match version_msg '$src_ver'"
+    fail=$((fail + 1))
+fi
+
 # 1. No argument -> usage, exit 1
 out="$("$RUN_BIN" 2>&1)"; code=$?
 check "no argument prints usage" 1 "$code" "$USAGE_HEADING" "$out"

@@ -128,8 +128,9 @@ uninstall:
 # is stripped: the dev build keeps the nasm -g DWARF lines and full symtab
 # (~115 KB combined) for debugging, but a freestanding binary only needs
 # .text/.rodata/.data/.bss at runtime. The manpage is gzipped, as Debian
-# policy expects (the RPM build gzips it via brp-compress).
-deb: $(TARGET) $(MANPAGE)
+# policy expects (the RPM build gzips it via brp-compress). The MIT license
+# ships as the Debian copyright file, as the license requires.
+deb: $(TARGET) $(MANPAGE) LICENSE
 	@if [ -z "$(PKG_VERSION)" ]; then \
 		echo "error: cannot extract version from $(SRC_DIR)/elfcheck_data.inc" >&2; \
 		exit 1; \
@@ -139,6 +140,8 @@ deb: $(TARGET) $(MANPAGE)
 	install -m 0755 "$(TARGET)" "$(DEB_ROOT)/$(DEB_BINDIR)/$(TARGET)"
 	strip --strip-all "$(DEB_ROOT)/$(DEB_BINDIR)/$(TARGET)"
 	gzip -9n -c "$(MANPAGE)" > "$(DEB_ROOT)/$(DEB_MANDIR)/elfcheck.1.gz"
+	install -d "$(DEB_ROOT)/usr/share/doc/elfcheck"
+	install -m 0644 LICENSE "$(DEB_ROOT)/usr/share/doc/elfcheck/copyright"
 	printf 'Package: elfcheck\nVersion: %s\nSection: utils\nPriority: optional\nArchitecture: amd64\nMaintainer: Elena FRISON <ElenaFri@users.noreply.github.com>\nDescription: validate and inspect ELF64 binaries\n Freestanding ELF64 inspector written in NASM (no libc, direct syscalls):\n parses headers, symbols, relocations and dynamic tags; disassembles\n code; reports notes, hardening and triage verdicts; optional JSON output.\n' \
 		"$(PKG_VERSION)" > "$(DEB_ROOT)/DEBIAN/control"
 	dpkg-deb --build --root-owner-group "$(DEB_ROOT)" "$(DEB)"
@@ -147,7 +150,7 @@ deb: $(TARGET) $(MANPAGE)
 # injected into packaging/elfcheck.spec from the single source of truth above,
 # and the build tree is kept self-contained under $(RPM_ROOT) so it never
 # touches ~/rpmbuild.
-rpm: $(TARGET) $(MANPAGE) $(RPM_SPEC)
+rpm: $(TARGET) $(MANPAGE) $(RPM_SPEC) LICENSE
 	@if [ -z "$(PKG_VERSION)" ]; then \
 		echo "error: cannot extract version from $(SRC_DIR)/elfcheck_data.inc" >&2; \
 		exit 1; \
@@ -161,6 +164,7 @@ rpm: $(TARGET) $(MANPAGE) $(RPM_SPEC)
 	install -m 0755 "$(TARGET)" "$(RPM_ROOT)/SOURCES/$(TARGET)"
 	strip --strip-all "$(RPM_ROOT)/SOURCES/$(TARGET)"
 	install -m 0644 "$(MANPAGE)" "$(RPM_ROOT)/SOURCES/elfcheck.1"
+	install -m 0644 LICENSE "$(RPM_ROOT)/SOURCES/LICENSE"
 	rpmbuild -bb --target "$(RPM_ARCH)" \
 		--define "_topdir $(CURDIR)/$(RPM_ROOT)" \
 		--define "_sourcedir $(CURDIR)/$(RPM_ROOT)/SOURCES" \

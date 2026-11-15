@@ -16,6 +16,12 @@ release notes: the section matching the tag is published verbatim.
   the symbol table are dev-only dead weight at runtime, so the shipped binary
   drops from 177 KB to 62 KB and the `.rpm` from 57 KB to 35 KB; the `.deb`
   manpage is now gzipped like the `.rpm`'s
+- Release packages now include the MIT license text (`.rpm`:
+  `/usr/share/licenses/elfcheck/LICENSE`, `.deb`:
+  `/usr/share/doc/elfcheck/copyright`), as the license requires; the OBS
+  package already shipped it
+- The README examples now show the colored `--triage` and `--entropy` output as
+  rendered images, covering the full severity palette (HIGH/MED/LOW/INFO)
 
 ## [1.1.1] - 2026-11-14
 

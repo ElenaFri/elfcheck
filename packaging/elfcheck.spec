@@ -41,9 +41,14 @@ verdict with a CI-friendly exit code. Optional single-line JSON output.
 %install
 install -D -m 0755 %{_sourcedir}/elfcheck %{buildroot}%{_bindir}/elfcheck
 install -D -m 0644 %{_sourcedir}/elfcheck.1 %{buildroot}%{_mandir}/man1/elfcheck.1
+# Explicit path rather than the %license macro: the macro resolves files from
+# the (here absent) build subdir, and this spec must also build with Debian's
+# rpmbuild on the CI runner.
+install -D -m 0644 %{_sourcedir}/LICENSE %{buildroot}%{_datadir}/licenses/elfcheck/LICENSE
 
 %files
 %{_bindir}/elfcheck
 %{_mandir}/man1/elfcheck.1*
+%{_datadir}/licenses/elfcheck/LICENSE
 
 %changelog
