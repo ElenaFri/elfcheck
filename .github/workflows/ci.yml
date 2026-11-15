@@ -86,6 +86,9 @@ jobs:
           make
           make deb
           make rpm
+          # The standalone artifact ships stripped like the packages: the
+          # nasm -g DWARF lines and symtab are dev-only dead weight.
+          strip --strip-all elfcheck
           cp elfcheck "elfcheck-${GITHUB_REF_NAME}-linux-amd64"
 
       - name: Sign the RPM

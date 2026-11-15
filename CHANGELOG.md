@@ -12,6 +12,10 @@ release notes: the section matching the tag is published verbatim.
   piped output stays plain and script-friendly; `--json` output is never colored
 - New `--no-color` flag and support for the `NO_COLOR` environment variable
   (see no-color.org) to disable colored output on a terminal
+- Release packages now ship a stripped binary: the `nasm -g` DWARF lines and
+  the symbol table are dev-only dead weight at runtime, so the shipped binary
+  drops from 177 KB to 62 KB and the `.rpm` from 57 KB to 35 KB; the `.deb`
+  manpage is now gzipped like the `.rpm`'s
 
 ## [1.1.1] - 2026-11-14
 

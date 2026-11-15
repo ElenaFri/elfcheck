@@ -124,7 +124,11 @@ install: $(TARGET) $(MANPAGE)
 uninstall:
 	rm -f "$(DESTDIR)$(BINDIR)/$(TARGET)" "$(DESTDIR)$(MANDIR)/man1/elfcheck.1"
 
-# Package the static binary and manpage as a Debian package.
+# Package the static binary and manpage as a Debian package. The staged binary
+# is stripped: the dev build keeps the nasm -g DWARF lines and full symtab
+# (~115 KB combined) for debugging, but a freestanding binary only needs
+# .text/.rodata/.data/.bss at runtime. The manpage is gzipped, as Debian
+# policy expects (the RPM build gzips it via brp-compress).
 deb: $(TARGET) $(MANPAGE)
 	@if [ -z "$(PKG_VERSION)" ]; then \
 		echo "error: cannot extract version from $(SRC_DIR)/elfcheck_data.inc" >&2; \
@@ -133,7 +137,8 @@ deb: $(TARGET) $(MANPAGE)
 	$(RM) -r "$(DEB_ROOT)"
 	install -d "$(DEB_ROOT)/DEBIAN" "$(DEB_ROOT)/$(DEB_BINDIR)" "$(DEB_ROOT)/$(DEB_MANDIR)"
 	install -m 0755 "$(TARGET)" "$(DEB_ROOT)/$(DEB_BINDIR)/$(TARGET)"
-	install -m 0644 "$(MANPAGE)" "$(DEB_ROOT)/$(DEB_MANDIR)/"
+	strip --strip-all "$(DEB_ROOT)/$(DEB_BINDIR)/$(TARGET)"
+	gzip -9n -c "$(MANPAGE)" > "$(DEB_ROOT)/$(DEB_MANDIR)/elfcheck.1.gz"
 	printf 'Package: elfcheck\nVersion: %s\nSection: utils\nPriority: optional\nArchitecture: amd64\nMaintainer: Elena FRISON <ElenaFri@users.noreply.github.com>\nDescription: validate and inspect ELF64 binaries\n Freestanding ELF64 inspector written in NASM (no libc, direct syscalls):\n parses headers, symbols, relocations and dynamic tags; disassembles\n code; reports notes, hardening and triage verdicts; optional JSON output.\n' \
 		"$(PKG_VERSION)" > "$(DEB_ROOT)/DEBIAN/control"
 	dpkg-deb --build --root-owner-group "$(DEB_ROOT)" "$(DEB)"
@@ -154,6 +159,7 @@ rpm: $(TARGET) $(MANPAGE) $(RPM_SPEC)
 	$(RM) -r "$(RPM_ROOT)"
 	install -d "$(RPM_ROOT)/SOURCES" "$(RPM_ROOT)/BUILD" "$(RPM_ROOT)/RPMS" "$(RPM_ROOT)/BUILDROOT"
 	install -m 0755 "$(TARGET)" "$(RPM_ROOT)/SOURCES/$(TARGET)"
+	strip --strip-all "$(RPM_ROOT)/SOURCES/$(TARGET)"
 	install -m 0644 "$(MANPAGE)" "$(RPM_ROOT)/SOURCES/elfcheck.1"
 	rpmbuild -bb --target "$(RPM_ARCH)" \
 		--define "_topdir $(CURDIR)/$(RPM_ROOT)" \

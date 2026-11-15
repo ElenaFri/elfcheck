@@ -47,6 +47,10 @@ verdict with a CI-friendly exit code. Optional single-line JSON output.
 
 %install
 %make_install PREFIX=%{_prefix}
+# Ship a stripped binary: the nasm -g DWARF lines and the symtab are dev-only
+# dead weight at runtime (~115 KB of a 177 KB build), and OBS does not strip
+# them for us.
+strip --strip-all %{buildroot}%{_bindir}/elfcheck
 
 %check
 # Smoke check only: the binary runs and validates its own structure. The full
