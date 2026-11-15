@@ -3,7 +3,7 @@
 Notable changes to elfcheck. This file is the source of the GitHub
 release notes: the section matching the tag is published verbatim.
 
-## [Unreleased]
+## [1.2.0] - 2026-11-15
 
 - Colored output: `--triage` now color-codes the severity tags (red for HIGH,
   yellow for MED, cyan for LOW, grey for INFO), and the `--entropy` `[high]`
