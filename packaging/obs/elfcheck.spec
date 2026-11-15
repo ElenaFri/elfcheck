@@ -67,3 +67,6 @@ strip --strip-all %{buildroot}%{_bindir}/elfcheck
 %{_mandir}/man1/elfcheck.1*
 
 %changelog
+* Sun Nov 15 2026 Elena FRISON <ElenaFri@users.noreply.github.com> - 1.2.0-0
+- elfcheck 1.2.0: colored triage and entropy output on terminals, stripped
+  binary, MIT license shipped with the package.

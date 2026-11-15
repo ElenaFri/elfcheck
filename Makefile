@@ -66,7 +66,10 @@ RPM_SIGN_CMD = %{__gpg} gpg --batch --no-verbose --no-armor --pinentry-mode loop
 # Keep -Wall; suppress only the expected cross-section relative dword references
 # and absolute qword pointers in dispatch tables used by the non-PIE binary.
 NASMFLAGS ?= -f elf64 -g -F dwarf -Wall -w-reloc-rel-dword -w-reloc-abs-qword
-LDFLAGS   ?= -nostdlib -no-pie
+# Emit PT_GNU_STACK explicitly (non-executable): without it the kernel falls
+# back to its legacy default for binaries that predate the flag, and rpmlint
+# reports missing-PT_GNU_STACK-section.
+LDFLAGS   ?= -nostdlib -no-pie -z noexecstack
 
 .PHONY: all run test fuzz-smoke coverage install uninstall deb rpm rpm-sign clean
 

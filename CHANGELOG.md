@@ -3,6 +3,15 @@
 Notable changes to elfcheck. This file is the source of the GitHub
 release notes: the section matching the tag is published verbatim.
 
+## [Unreleased]
+
+- The binary now carries an explicit non-executable `PT_GNU_STACK` (`ld -z
+  noexecstack`): without it the kernel falls back to its legacy default for
+  the stack and rpmlint reports missing-PT_GNU_STACK-section. elfcheck's own
+  hardening report now says `NX: enabled` about itself instead of
+  `NX: unknown (no PT_GNU_STACK)`
+- Both RPM specs now carry a `%changelog` entry (rpmlint no-changelogname-tag)
+
 ## [1.2.0] - 2026-11-15
 
 - Colored output: `--triage` now color-codes the severity tags (red for HIGH,
