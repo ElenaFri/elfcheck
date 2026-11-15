@@ -52,6 +52,8 @@ install -D -m 0644 %{_sourcedir}/LICENSE %{buildroot}%{_datadir}/licenses/elfche
 %{_datadir}/licenses/elfcheck/LICENSE
 
 %changelog
+* Sun Nov 15 2026 Elena FRISON <ElenaFri@users.noreply.github.com> - 1.2.1-1
+- Explicit non-executable PT_GNU_STACK (ld -z noexecstack).
 * Sun Nov 15 2026 Elena FRISON <ElenaFri@users.noreply.github.com> - 1.2.0-1
 - elfcheck 1.2.0: colored triage and entropy output on terminals, stripped
   binary, MIT license shipped with the package.

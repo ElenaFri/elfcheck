@@ -3,7 +3,7 @@
 Notable changes to elfcheck. This file is the source of the GitHub
 release notes: the section matching the tag is published verbatim.
 
-## [Unreleased]
+## [1.2.1] - 2026-11-15
 
 - The binary now carries an explicit non-executable `PT_GNU_STACK` (`ld -z
   noexecstack`): without it the kernel falls back to its legacy default for

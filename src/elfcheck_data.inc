@@ -15,7 +15,7 @@ section .rodata
                     db "  --no-color      disable colored output (also: NO_COLOR env)", 10
     usage_len:      equ $ - usage_msg
 
-    version_msg:    db "elfcheck v1.2.0", 10, 0
+    version_msg:    db "elfcheck v1.2.1", 10, 0
 
     opt_json:       db "--json", 0
     opt_header:     db "--header", 0

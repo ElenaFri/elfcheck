@@ -16,7 +16,7 @@
 %global debug_package %{nil}
 
 Name:           elfcheck
-Version:        1.2.0
+Version:        1.2.1
 Release:        0
 Summary:        Validate and inspect ELF64 binaries
 License:        MIT
@@ -67,6 +67,8 @@ strip --strip-all %{buildroot}%{_bindir}/elfcheck
 %{_mandir}/man1/elfcheck.1*
 
 %changelog
+* Sun Nov 15 2026 Elena FRISON <ElenaFri@users.noreply.github.com> - 1.2.1-0
+- Explicit non-executable PT_GNU_STACK (ld -z noexecstack).
 * Sun Nov 15 2026 Elena FRISON <ElenaFri@users.noreply.github.com> - 1.2.0-0
 - elfcheck 1.2.0: colored triage and entropy output on terminals, stripped
   binary, MIT license shipped with the package.
